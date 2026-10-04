@@ -38,6 +38,40 @@ def _compound(name, body):
     return b"\x0a" + _name(name) + body + b"\x00"
 
 
+def _string(name, text):
+    return b"\x08" + _name(name) + _name(text)
+
+
+def _list(name, item_id, payloads):
+    """TAG_List: payloads gia' codificati (senza tipo e nome)."""
+    return b"\x09" + _name(name) + struct.pack(">bi", item_id, len(payloads)) + b"".join(payloads)
+
+
+def _ints(values):
+    return [struct.pack(">i", v) for v in values]
+
+
+def structure(states, blocks, size, palettes=False, gz=True, keys=("Name", "Properties")):
+    """File .nbt dei blocchi struttura. states: "minecraft:x[k=v]"; blocks:
+    [(indice di stato, (x, y, z))]. palettes=True: lista di palette (la prima conta)."""
+    entries = []
+    for state in states:
+        name, props = schem.parse_state(state)
+        body = _string(keys[0], name)
+        if props:
+            body += _compound(keys[1], b"".join(_string(k, v) for k, v in props.items()))
+        entries.append(body + b"\x00")
+    if palettes:
+        palette = _list("palettes", 9, [struct.pack(">bi", 10, len(entries)) + b"".join(entries)] * 2)
+    else:
+        palette = _list("palette", 10, entries)
+    block_list = _list("blocks", 10, [_int("state", st) + _list("pos", 3, _ints(pos)) + b"\x00"
+                                      for st, pos in blocks])
+    body = _int("DataVersion", 3465) + _list("size", 3, _ints(size)) + palette + block_list
+    raw = _compound("", body)
+    return gzip.compress(raw) if gz else raw
+
+
 def _varints(values):
     out = bytearray()
     for v in values:
@@ -147,6 +181,32 @@ def main():
         try:
             schem.read_schem(load(data))
             raise AssertionError("file rotto accettato")
+        except IOError:
+            pass
+
+    # .nbt dei blocchi struttura: stessi blocchi del .schem qui sopra
+    pos = [(i % w, i // (w * l), (i // w) % l) for i in range(w * h * l)]  # indice -> (x, y, z)
+    placed = [(states.index(states[v]), pos[i]) for i, v in enumerate(indices)]
+    # fino alla 26.2 Name / Properties, dalla 26.3 id / properties
+    for palettes, gz, keys in ((False, True, ("Name", "Properties")), (True, True, ("Name", "Properties")),
+                               (False, False, ("Name", "Properties")), (False, True, ("id", "properties"))):
+        root = load(structure(states, placed, (w, h, l), palettes=palettes, gz=gz, keys=keys))
+        assert schem.is_structure(root) and not schem.is_sponge(root)
+        got, palette, width, length = schem.read_structure_states(root)
+        assert (width, length) == (w, l) and [palette[i] for i in got] == [
+            schem.parse_state(states[v])[0] + ("[%s]" % ",".join(
+                "%s=%s" % kv for kv in sorted(schem.parse_state(states[v])[1].items()))
+                if schem.parse_state(states[v])[1] else "") for v in indices]
+        assert schem.read_structure(root)[:2] == schem.read_schem(load(sponge(states, indices, w, h, l)))[:2]
+    # celle senza blocco (structure void): aria; i blocchi possono essere in qualsiasi ordine
+    root = load(structure(["minecraft:stone"], [(0, (1, 0, 1))], (2, 1, 2)))
+    got, palette, _w, _l = schem.read_structure_states(root)
+    assert [palette[i] for i in got] == ["minecraft:air"] * 3 + ["minecraft:stone"]
+    for bad in (structure(["minecraft:stone"], [(0, (2, 0, 0))], (2, 1, 1)),  # fuori da size
+                structure(["minecraft:stone"], [(1, (0, 0, 0))], (1, 1, 1))):  # stato inesistente
+        try:
+            schem.read_structure_states(load(bad))
+            raise AssertionError("file .nbt rotto accettato")
         except IOError:
             pass
 

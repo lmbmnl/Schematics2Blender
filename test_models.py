@@ -112,6 +112,13 @@ part_faces = sorted((round(p.center.x, 4), round(p.center.y, 4), round(p.center.
                      ob.data.materials[p.material_index].name) for ob in parts for p in ob.data.polygons)
 assert part_faces == whole_faces and all(not ob.data.validate() for ob in parts)
 
+# .nbt dei blocchi struttura con i modelli: come il .schem
+nbt_mixed = write("mixed.nbt", ts.structure(["minecraft:stone", "minecraft:glass"],
+                                            [(0, (0, 0, 0)), (1, (1, 0, 0)), (0, (2, 0, 0))], (3, 1, 1)))
+(from_nbt,) = run(nbt_mixed, "JOIN")
+assert sorted((round(p.center.x, 4), round(p.center.y, 4), round(p.center.z, 4),
+               from_nbt.data.materials[p.material_index].name) for p in from_nbt.data.polygons) == whole_faces
+
 # Join by Block: un oggetto per tipo, chiuso (le facce tra tipi diversi restano)
 blocks = run(mixed, "JOIN_BLOCK")  # pietra, vetro, pietra
 base = lambda ob: ob.name.split(".")[0]  # noqa: E731  ("stone.001": mesh omonime di import precedenti)

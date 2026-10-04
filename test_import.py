@@ -79,6 +79,21 @@ clear()
 objs2 = new_objects(lambda: bpy.ops.import_scene.schematic_run(filepath=path2, mode="INSTANCE"))
 assert sorted(map(key, objs2)) == from_schem
 
+# .nbt dei blocchi struttura: stessi blocchi nelle stesse posizioni del .schem
+pos = [(i % w, i // (w * l), (i // w) % l) for i in range(w * h * l)]
+nbt_path = write("test.nbt", ts.structure(states, [(v, pos[i]) for i, v in enumerate(indices)], (w, h, l)))
+clear()
+from_nbt = new_objects(lambda: bpy.ops.import_scene.schematic_run(filepath=nbt_path, mode="INSTANCE"))
+assert sorted(key(ob) for ob in from_nbt if ob.blockId != 0) == from_schem
+not_structure = write("level.nbt", gzip.compress(ts._compound("", ts._int("x", 1))))
+clear()
+try:
+    bpy.ops.import_scene.schematic_run(filepath=not_structure)
+    raise AssertionError("doveva fallire")
+except RuntimeError as error:
+    assert "struttura" in str(error), error
+assert not bpy.data.objects
+
 # un file Sponge salvato con estensione .schematic viene riconosciuto lo stesso
 path3 = write("sponge_named.schematic", ts.sponge(states, indices, w, h, l, version=2))
 clear()

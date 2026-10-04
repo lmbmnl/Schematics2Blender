@@ -9,6 +9,11 @@ their textures, made with animators in mind: every block can be its own object.
   no equivalent are imported as magenta cubes named after the block and listed at
   the end of the import.
 
+- `.nbt`: structure files saved by structure blocks (and used by many build sites),
+  gzip or uncompressed; both the `Name`/`Properties` palette (up to 26.2) and the
+  `id`/`properties` one (26.3 on) are read. Cells with no block (structure void) stay
+  empty; block entity data (chest contents...) and entities are not imported.
+
 The format is detected from the file contents. `.litematic` files are not supported.
 
 ## Minecraft Assets (recommended)

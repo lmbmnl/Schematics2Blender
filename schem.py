@@ -132,6 +132,62 @@ def read_schem_states(root):
     return indices, by_index, width, length
 
 
+def is_structure(root):
+    """True se l'NBT e' un file .nbt dei blocchi struttura (structure block)."""
+    return "size" in root and "blocks" in root and ("palette" in root or "palettes" in root)
+
+
+def read_structure_states(root):
+    """NBT di un file .nbt dei blocchi struttura -> (indici, palette, width, length).
+
+    Formato: size [x, y, z], palette [{Name, Properties}] ({id, properties}
+    dalla 26.3; palettes: piu' palette alternative, si usa la prima) e
+    blocks [{state, pos [x, y, z]}].
+    Le celle senza blocco (structure void) restano vuote; i dati dei blocchi
+    (contenuto dei bauli...) e le entita' non vengono letti.
+    https://minecraft.wiki/w/Structure_file
+    """
+    size = [tag.value for tag in root["size"].value]
+    if len(size) != 3 or min(size) < 0:
+        raise IOError("file .nbt non valido: size %s" % size)
+    width, height, length = size
+    if "palette" in root:
+        entries = root["palette"].value
+    elif root["palettes"].value:
+        entries = root["palettes"].value[0].value
+    else:
+        raise IOError("file .nbt non valido: palettes vuoto")
+    palette = []
+    for entry in entries:
+        # fino alla 26.2: Name / Properties; dalla 26.3: id / properties
+        name_key = "Name" if "Name" in entry else "id"
+        props_key = "Properties" if "Properties" in entry else "properties"
+        if name_key not in entry:
+            raise IOError("file .nbt non valido: stato senza Name / id")
+        state = entry[name_key].value
+        props = entry[props_key].value if props_key in entry else {}
+        if props:
+            state += "[%s]" % ",".join("%s=%s" % (k, v.value) for k, v in sorted(props.items()))
+        palette.append(state)
+    void = len(palette)
+    palette.append("minecraft:air")  # celle senza blocco nel file
+    indices = [void] * (width * height * length)
+    for block in root["blocks"].value:
+        state = block["state"].value
+        x, y, z = (tag.value for tag in block["pos"].value)
+        if not (0 <= x < width and 0 <= y < height and 0 <= z < length):
+            raise IOError("file .nbt corrotto: blocco fuori da size in %s" % ((x, y, z),))
+        if not 0 <= state < void:
+            raise IOError("file .nbt corrotto: stato %d fuori dalla palette" % state)
+        indices[x + z * width + y * width * length] = state
+    return indices, palette, width, length
+
+
+def read_structure(root):
+    """Come read_schem, per i file .nbt dei blocchi struttura."""
+    return _legacy_arrays(*read_structure_states(root))
+
+
 def read_schem(root):
     """NBT di uno Sponge Schematic -> (blocks, data, width, length, unknown).
 
@@ -139,7 +195,11 @@ def read_schem(root):
     (x + z * width + y * width * length). Gli stati senza equivalente legacy
     hanno id negativi: unknown[id] e' il loro nome.
     """
-    indices, palette, width, length = read_schem_states(root)
+    return _legacy_arrays(*read_schem_states(root))
+
+
+def _legacy_arrays(indices, palette, width, length):
+    """Indici di palette di stati moderni -> id e metadata 1.12 (vedi read_schem)."""
     unknown, codes = {}, {}
     ids, metas = [], []
     for state in palette:

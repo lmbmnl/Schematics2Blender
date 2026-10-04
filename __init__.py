@@ -11,7 +11,8 @@ from bpy_extras.io_utils import ImportHelper
 from . import colors, compat, fastjoin, mcassets, mcimport, nbt
 from .blockmanager import BlockManager
 from .blocks.Unknown import Unknown
-from .schem import is_sponge, read_schem, read_schem_states, state_of_legacy
+from .schem import (is_sponge, is_structure, read_schem, read_schem_states, read_structure,
+                    read_structure_states, state_of_legacy)
 
 # ogni tick del modal lavora ~40ms e poi restituisce il controllo a Blender,
 # cosi' la percentuale si aggiorna invece di bloccare la finestra
@@ -33,17 +34,20 @@ _JOINS = ("JOIN", "JOIN_MATERIAL", "JOIN_BLOCK")  # un esemplare per tipo, poi m
 _SPLIT = ("JOIN_MATERIAL", "JOIN_BLOCK")  # piu' oggetti, in una collezione col nome del file
 
 
-EXTENSIONS = (".schematic", ".schem")
+EXTENSIONS = (".schematic", ".schem", ".nbt")
 
 
 def _read_schematic(filepath):
-    """Legge .schematic (MCEdit) o .schem (Sponge, WorldEdit 1.13+).
+    """Legge .schematic (MCEdit), .schem (Sponge, WorldEdit 1.13+) o .nbt
+    (blocchi struttura di Minecraft).
 
     Torna (blocks, data, width, length, unknown): id e metadata legacy per
     blocco, unknown = {id negativo: nome} dei blocchi moderni senza modello.
     Il formato si riconosce dal contenuto: c'e' chi salva Sponge come .schematic.
     """
     nbtfile = _open_nbt(filepath)
+    if is_structure(nbtfile):
+        return read_structure(nbtfile)
     if is_sponge(nbtfile):
         return read_schem(nbtfile)
     return _legacy_arrays(nbtfile)
@@ -53,6 +57,9 @@ def _read_states(filepath):
     """Per i modelli di Minecraft: (palette di stati, indice per blocco, width,
     length, da_1.12). Il .schematic 1.12 viene convertito in stati moderni."""
     nbtfile = _open_nbt(filepath)
+    if is_structure(nbtfile):
+        indices, palette, width, length = read_structure_states(nbtfile)
+        return palette, indices, width, length, False
     if is_sponge(nbtfile):
         indices, palette, width, length = read_schem_states(nbtfile)
         return palette, indices, width, length, False
@@ -72,8 +79,12 @@ def _open_nbt(filepath):
     if ext == ".litematic":
         raise IOError("I file Litematica (.litematic) non sono supportati")
     if ext not in EXTENSIONS:
-        raise IOError("Il file selezionato non e' un .schematic o .schem")
-    return nbt.nbt.NBTFile(filepath, "rb")
+        raise IOError("Il file selezionato non e' un .schematic, .schem o .nbt")
+    nbtfile = nbt.nbt.NBTFile(filepath, "rb")
+    if ext == ".nbt" and not is_structure(nbtfile) and not is_sponge(nbtfile):
+        raise IOError("Il file .nbt non e' una struttura dei blocchi struttura "
+                      "(mancano size, palette e blocks)")
+    return nbtfile
 
 
 def _legacy_arrays(nbtfile):
@@ -93,13 +104,13 @@ def _prepare_scene(scene):
 
 
 class SCHEMATIC_OT_import(Operator, ImportHelper):
-    """Importa uno schematic di Minecraft (.schematic MCEdit o .schem WorldEdit)"""
+    """Importa uno schematic di Minecraft (.schematic MCEdit, .schem WorldEdit, .nbt struttura)"""
 
     bl_idname = "import_scene.schematic"
     bl_label = "Import Schematic"
 
     filename_ext = ".schematic"
-    filter_glob: StringProperty(default="*.schematic;*.schem", options={"HIDDEN"})
+    filter_glob: StringProperty(default="*.schematic;*.schem;*.nbt", options={"HIDDEN"})
 
     def execute(self, context):
         return bpy.ops.import_scene.schematic_mode("INVOKE_DEFAULT", filepath=self.filepath)
@@ -471,7 +482,7 @@ _CLASSES = (SCHEMATIC_AP_preferences, SCHEMATIC_OT_open_textures,
 
 
 def import_images_button(self, context):
-    self.layout.operator(SCHEMATIC_OT_import.bl_idname, text="Minecraft Schematic (.schematic, .schem)")
+    self.layout.operator(SCHEMATIC_OT_import.bl_idname, text="Minecraft Schematic (.schematic, .schem, .nbt)")
 
 
 def register():
