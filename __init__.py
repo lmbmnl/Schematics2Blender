@@ -8,7 +8,7 @@ from bpy.props import EnumProperty, StringProperty
 from bpy.types import AddonPreferences, Operator
 from bpy_extras.io_utils import ImportHelper
 
-from . import compat, fastjoin, mcassets, mcimport, nbt
+from . import colors, compat, fastjoin, mcassets, mcimport, nbt
 from .blockmanager import BlockManager
 from .blocks.Unknown import Unknown
 from .schem import is_sponge, read_schem, read_schem_states, state_of_legacy
@@ -181,6 +181,7 @@ class SCHEMATIC_OT_run(Operator):
         self._count, self._index, self._missing = self._job.count, 0, {}
         self._total = self._job.steps() + (math.ceil(self._count / _CHUNK) if self.mode == "INSTANCE" else 0)
         self._run = self._job_steps(context)
+        self._meshes = []
         _prepare_scene(context.scene)
 
     def _job_steps(self, context):
@@ -196,6 +197,7 @@ class SCHEMATIC_OT_run(Operator):
             if not t.corners or not len(cells):
                 continue
             mesh = mcimport.template_mesh(t, self._job.materials)
+            self._meshes.append(mesh)
             short = t.name.split(":", 1)[-1]
             for x, y, z in cells.tolist():
                 ob = bpy.data.objects.new(short, mesh)
@@ -295,6 +297,9 @@ class SCHEMATIC_OT_run(Operator):
                     ob.select_set(False)
                 joined.select_set(True)
                 context.view_layer.objects.active = joined
+                self._meshes.append(mesh)
+            # colori a tinta unita per le texture nuove (pannello Schematic nella vista 3D)
+            colors.after_import(context.scene, self._job.materials.list, self._meshes)
             self._job.assets.close()
             return
         if self.mode != "JOIN":
@@ -433,11 +438,13 @@ def register():
         name="Block Metadata", description="Stores the metadata of this object's block", default=0)
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
+    colors.register()
     bpy.types.TOPBAR_MT_file_import.append(import_images_button)
 
 
 def unregister():
     bpy.types.TOPBAR_MT_file_import.remove(import_images_button)
+    colors.unregister()
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
     del bpy.types.Object.blockId

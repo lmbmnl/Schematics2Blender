@@ -135,5 +135,54 @@ kept, keep = mcimport._split_coincident(corners, np.array([4, 4, 4, 4]),
 assert keep.tolist() == [False, False, True, True] and len(kept) == 8  # opache: via; altre: staccate
 assert np.abs(kept[:4] - kept[4:]).max() > 0
 
+# --- colori a tinta unita al posto delle texture (pannello Schematic)
+colors = addon.colors
+colors.preset_path = lambda create=False: os.path.join(TMP, "texture_colors.json")
+(joined,) = run(two, "JOIN")
+flats = colors.flat_materials()
+assert "minecraft:block/stone" in flats  # creato da solo dopo l'import
+stone = flats["minecraft:block/stone"]
+srgb = 128 / 255.0
+expected = ((srgb + 0.055) / 1.055) ** 2.4  # media in lineare del grigio 128
+assert all(abs(c - expected) < 1e-4 for c in stone.s2b_color), tuple(stone.s2b_color)
+bsdf = stone.node_tree.nodes["Principled BSDF"]
+assert abs(bsdf.inputs["Base Color"].default_value[0] - expected) < 1e-4
+stone.s2b_color = (0.1, 0.2, 0.3)  # come dalla ruota dei colori
+assert tuple(round(c, 4) for c in bsdf.inputs["Base Color"].default_value) == (0.1, 0.2, 0.3, 1.0)
+assert tuple(round(c, 4) for c in stone.diffuse_color) == (0.1, 0.2, 0.3, 1.0)
+
+scene = bpy.context.scene
+scene.s2b_use_colors = True
+assert [m.name for m in joined.data.materials] == [stone.name]
+textured = bpy.data.materials["mc stone"]
+assert textured.use_fake_user  # resta nel file per tornare indietro
+scene.s2b_use_colors = False
+assert [m.name for m in joined.data.materials] == ["mc stone"] and "mc_textured" not in joined.data
+
+# rinomina + preset: un file nuovo (qui: materiali cancellati) riprende nome e colore
+stone.name = "Pietra"
+assert colors.save_preset(colors.flat_materials().values())[1] >= 1
+bpy.data.materials.remove(stone)
+assert colors.ensure_flats() >= 1
+again = colors.flat_materials()["minecraft:block/stone"]
+assert again.name == "Pietra" and tuple(round(c, 4) for c in again.s2b_color) == (0.1, 0.2, 0.3)
+again.s2b_color = (1, 1, 1)
+assert colors.apply_preset() >= 1 and tuple(round(c, 4) for c in again.s2b_color) == (0.1, 0.2, 0.3)
+assert colors.reset_color(again) and abs(again.s2b_color[0] - expected) < 1e-4
+
+# "Usa colori" attivo: l'import mette subito i colori, anche in Instance
+scene.s2b_use_colors = True
+objs = run(two, "INSTANCE")
+assert all(ob.data.materials[0] == again for ob in objs)
+scene.s2b_use_colors = False
+assert all(ob.data.materials[0].name == "mc stone" for ob in objs)
+
+# texture con trasparenza (vetro): colore pieno ma sagoma dalla texture
+run(glass, "JOIN")
+clear_flat = colors.flat_materials()["minecraft:block/glass"]
+assert clear_flat.node_tree.nodes["Principled BSDF"].inputs["Alpha"].is_linked
+assert not again.node_tree.nodes["Principled BSDF"].inputs["Alpha"].is_linked  # pietra: opaca
+
 addon.unregister()
+assert not hasattr(bpy.types.Material, "s2b_color")
 print("test_models: ok")

@@ -123,6 +123,9 @@ class Materials:
             if mat is None:
                 mat = self._make(layers)
                 mat["mc_key"] = key
+                # per i colori a tinta unita (colors.py): texture di sotto e sua tinta
+                mat["mc_texture"] = layers[0][0] or ""
+                mat["mc_tint"] = [_linear(c) for c in layers[0][1]] if layers[0][1] else [1.0, 1.0, 1.0]
             self._index[layers] = len(self.list)
             self.list.append(mat)
         return self._index[layers]

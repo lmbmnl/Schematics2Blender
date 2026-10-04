@@ -31,6 +31,17 @@ entities are not drawn (chests, beds, shulker boxes and pots are plain boxes);
 random variants use the first model; tints are the plains biome ones; stair shapes
 of 1.12 files are not recomputed (straight); blocks from mods are magenta cubes.
 
+### Texture colours panel
+3D Viewport sidebar (N) > **Schematic** > **Colori delle texture**: every Minecraft
+texture in the file gets a plain Principled BSDF material with the texture's average
+colour (alpha-weighted, in linear space, times the biome tint). Click the swatch to
+change the colour, type in the field to rename the material. **Usa colori** swaps the
+textured materials for the plain ones (and back); transparent textures (flowers,
+leaves, glass, torches) keep their shape through the texture's alpha. **Salva preset**
+stores colours and names in `presets/texture_colors.json` in the add-on's user folder
+(kept by updates); they are used by every later import, in any .blend file.
+A material made of two textures (grass block side: dirt + overlay) uses the bottom one.
+
 With **Minecraft Assets** empty the add-on uses its own 1.12 models and the
 texture folder below.
 
