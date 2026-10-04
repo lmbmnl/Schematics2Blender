@@ -22,6 +22,22 @@ _DIRS = {(0, -1): (-1, 0, 0), (0, 1): (1, 0, 0), (1, -1): (0, -1, 0),
          (1, 1): (0, 1, 0), (2, -1): (0, 0, -1), (2, 1): (0, 0, 1)}
 
 
+def int_array(values):
+    """Blocks / Data del file (bytearray, Tag NBT o lista) -> array int64."""
+    values = getattr(values, "value", values)
+    if isinstance(values, (bytes, bytearray)):
+        return np.frombuffer(bytes(values), np.uint8).astype(np.int64)
+    return np.asarray(values, np.int64)
+
+
+def cells(index, width, length):
+    """Indici del file -> celle (x, y, z) di Blender, come SCHEMATIC_OT_run._place."""
+    x = index % width - width // 2
+    y = length - (index % (width * length)) // width - (length + 1) // 2 - 1
+    z = index // (width * length)
+    return np.stack((x, y, z), axis=1)
+
+
 def cell_keys(cells):
     c = np.asarray(cells, np.int64).reshape(-1, 3) + _OFF
     return (c[:, 0] * _B + c[:, 1]) * _B + c[:, 2]
@@ -170,7 +186,41 @@ def build_mesh(name, instances, templates):
         sizes, mats = sizes[~drop], mats[~drop]
     if not len(sizes):
         return mesh
-    _, first, inverse = np.unique(quant, axis=0, return_index=True, return_inverse=True)
+    return fill_mesh(mesh, corners, sizes, uvs, mats, materials)
+
+
+_MIX = np.array([0x9E3779B97F4A7C15, 0xC2B2AE3D27D4EB4F, 0x165667B19E3779F9,
+                 0xD6E8FEB86659FD93, 0xFF51AFD7ED558CCD], np.uint64)
+
+
+def unique_rows(rows):
+    """Come np.unique(rows, axis=0, return_index=True, return_inverse=True,
+    return_counts=True) ma molto piu' veloce sui milioni di righe: ogni riga di
+    interi diventa un hash a 64 bit. Se due righe diverse avessero lo stesso
+    hash (praticamente impossibile) si usa np.unique per righe: sempre esatto."""
+    rows = np.ascontiguousarray(rows, np.int64)
+    if rows.ndim == 1:
+        rows = rows[:, None]
+    h = np.zeros(len(rows), np.uint64)
+    with np.errstate(over="ignore"):
+        for j in range(rows.shape[1]):
+            h = (h ^ rows[:, j].astype(np.uint64)) * _MIX[j % len(_MIX)]
+            h ^= h >> np.uint64(31)
+    _, first, inverse, counts = np.unique(h, return_index=True, return_inverse=True, return_counts=True)
+    inverse = inverse.ravel()
+    if not np.array_equal(rows[first][inverse], rows):
+        _, first, inverse, counts = np.unique(rows, axis=0, return_index=True,
+                                              return_inverse=True, return_counts=True)
+        inverse = inverse.ravel()
+    return first, inverse, counts
+
+
+def fill_mesh(mesh, corners, sizes, uvs, mats, materials):
+    """Riempie mesh: angoli (n, 3) faccia dopo faccia, sizes = angoli di ogni
+    faccia, uvs (n, 2), mats = indice del materiale di ogni faccia.
+    I vertici coincidenti vengono saldati."""
+    quant = np.round(corners / _EPS).astype(np.int64)
+    first, inverse, _counts = unique_rows(quant)
     verts = corners[first]
     mesh.vertices.add(len(verts))
     mesh.vertices.foreach_set("co", verts.ravel())
@@ -181,9 +231,9 @@ def build_mesh(name, instances, templates):
     mesh.polygons.foreach_set("loop_start", starts)
     mesh.update(calc_edges=True)
     layer = mesh.uv_layers.new(name="UVMap")
-    layer.data.foreach_set("uv", uvs.ravel())
+    layer.data.foreach_set("uv", np.asarray(uvs, float).ravel())
     for m in materials:
         mesh.materials.append(m)
-    mesh.polygons.foreach_set("material_index", mats.astype(np.int32))
+    mesh.polygons.foreach_set("material_index", np.asarray(mats).astype(np.int32))
     mesh.update()
     return mesh

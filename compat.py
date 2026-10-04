@@ -64,6 +64,33 @@ def user_texture_dir(create=False):
         return None
 
 
+def _prefs():
+    addon = bpy.context.preferences.addons.get(__package__)
+    return getattr(addon, "preferences", None)
+
+
+def assets_path():
+    """client.jar / resource pack scelto nelle preferenze, o "" (modelli 1.12)."""
+    return bpy.path.abspath(getattr(_prefs(), "assets_path", "") or "")
+
+
+def assets_status(path):
+    """(testo, icona) per le preferenze."""
+    if not path:
+        return "Non impostato: si usano i modelli dell'addon (solo blocchi 1.12)", "INFO"
+    from .mcassets import Assets
+    try:
+        assets = Assets([bpy.path.abspath(path)])
+    except (IOError, OSError) as error:
+        return str(error), "ERROR"
+    try:
+        if not assets.has_blockstates():
+            return "Non contiene i modelli dei blocchi (assets/minecraft/blockstates)", "ERROR"
+        return "Modelli e texture di Minecraft trovati", "CHECKMARK"
+    finally:
+        assets.close()
+
+
 def texture_dirs():
     """Dove cercare le texture, in ordine."""
     dirs = []

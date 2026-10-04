@@ -102,12 +102,11 @@ def _field(compound, key):
     return compound[key]
 
 
-def read_schem(root):
-    """NBT di uno Sponge Schematic -> (blocks, data, width, length, unknown).
+def read_schem_states(root):
+    """NBT di uno Sponge Schematic -> (indici, palette, width, length).
 
-    blocks e data sono liste indicizzate come nel .schematic
-    (x + z * width + y * width * length). Gli stati senza equivalente legacy
-    hanno id negativi: unknown[id] e' il loro nome.
+    indici[i] e' la posizione nella palette dello stato del blocco i
+    (x + z * width + y * width * length); palette[n] e' lo stato moderno.
     """
     schematic = root["Schematic"] if "Schematic" in root and root["Schematic"].id == TAG_COMPOUND else root
     version = schematic["Version"].value if "Version" in schematic else 1
@@ -117,15 +116,33 @@ def read_schem(root):
     total = width * height * length
     if version >= 3:
         if "Blocks" not in schematic:  # lo schematic puo' non avere blocchi
-            return [0] * total, [0] * total, width, length, {}
+            return [0] * total, ["minecraft:air"], width, length
         container = schematic["Blocks"]
         palette, raw = _field(container, "Palette"), _field(container, "Data").value
     else:
         palette, raw = _field(schematic, "Palette"), _field(schematic, "BlockData").value
-
-    unknown, codes = {}, {}
-    ids, metas = {}, {}
+    states = {}
     for state, tag in palette.value.items():
+        states[tag.value] = state
+    size = max(states) + 1 if states else 1
+    by_index = [states.get(i, "minecraft:air") for i in range(size)]
+    indices = read_varints(raw, total)
+    if indices and max(indices) >= size:
+        raise IOError("file .schem corrotto: indice %d fuori dalla palette" % max(indices))
+    return indices, by_index, width, length
+
+
+def read_schem(root):
+    """NBT di uno Sponge Schematic -> (blocks, data, width, length, unknown).
+
+    blocks e data sono liste indicizzate come nel .schematic
+    (x + z * width + y * width * length). Gli stati senza equivalente legacy
+    hanno id negativi: unknown[id] e' il loro nome.
+    """
+    indices, palette, width, length = read_schem_states(root)
+    unknown, codes = {}, {}
+    ids, metas = [], []
+    for state in palette:
         legacy = legacy_of(state)
         if legacy is None:
             name = parse_state(state)[0]
@@ -133,12 +150,27 @@ def read_schem(root):
                 codes[name] = -1 - len(codes)
                 unknown[codes[name]] = name
             legacy = (codes[name], 0)
-        ids[tag.value], metas[tag.value] = legacy
-
-    indices = read_varints(raw, total)
-    try:
-        blocks = [ids[i] for i in indices]
-        data = [metas[i] for i in indices]
-    except KeyError as error:
-        raise IOError("file .schem corrotto: indice %s fuori dalla palette" % error)
+        ids.append(legacy[0])
+        metas.append(legacy[1])
+    blocks = [ids[i] for i in indices]
+    data = [metas[i] for i in indices]
     return blocks, data, width, length, unknown
+
+
+_LEGACY_STATE = {}
+
+
+def state_of_legacy(block_id, metadata):
+    """Id e metadata della 1.12 -> stato moderno ("minecraft:oak_log[axis=x]"), o None.
+
+    La tabella mette shape=outer_right su tutte le scale (nella 1.12 la forma
+    non era salvata): si toglie e vale il default, scala dritta.
+    """
+    if not _LEGACY_STATE:
+        for name, entries in LEGACY.items():
+            for bid, meta, props in entries:
+                if (bid, meta) not in _LEGACY_STATE:
+                    props = [(k, v) for k, v in props if not (k == "shape" and name.endswith("_stairs"))]
+                    _LEGACY_STATE[(bid, meta)] = (
+                        name + ("[%s]" % ",".join("%s=%s" % kv for kv in props) if props else ""))
+    return _LEGACY_STATE.get((block_id, metadata)) or _LEGACY_STATE.get((block_id, 0))

@@ -8,32 +8,17 @@ from bpy.props import EnumProperty, StringProperty
 from bpy.types import AddonPreferences, Operator
 from bpy_extras.io_utils import ImportHelper
 
-from . import compat, fastjoin, nbt
+from . import compat, fastjoin, mcassets, mcimport, nbt
 from .blockmanager import BlockManager
 from .blocks.Unknown import Unknown
-from .schem import is_sponge, read_schem
+from .schem import is_sponge, read_schem, read_schem_states, state_of_legacy
 
 # ogni tick del modal lavora ~40ms e poi restituisce il controllo a Blender,
 # cosi' la percentuale si aggiorna invece di bloccare la finestra
 _TICK_SECONDS = 0.04
 
 _KEY = 4096  # chiave Join = id * _KEY + metadata
-
-
-def _int_array(values):
-    """Blocks / Data del file (bytearray, Tag NBT o lista) -> array int64."""
-    values = getattr(values, "value", values)
-    if isinstance(values, (bytes, bytearray)):
-        return np.frombuffer(bytes(values), np.uint8).astype(np.int64)
-    return np.asarray(values, np.int64)
-
-
-def _cells(index, width, length):
-    """Indici del file -> celle (x, y, z) di Blender, come SCHEMATIC_OT_run._place."""
-    x = index % width - width // 2
-    y = length - (index % (width * length)) // width - (length + 1) // 2 - 1
-    z = index // (width * length)
-    return np.stack((x, y, z), axis=1)
+_CHUNK = 500  # Instance con i modelli: oggetti creati per passo
 
 
 MODE_ITEMS = [
@@ -52,14 +37,40 @@ def _read_schematic(filepath):
     blocco, unknown = {id negativo: nome} dei blocchi moderni senza modello.
     Il formato si riconosce dal contenuto: c'e' chi salva Sponge come .schematic.
     """
+    nbtfile = _open_nbt(filepath)
+    if is_sponge(nbtfile):
+        return read_schem(nbtfile)
+    return _legacy_arrays(nbtfile)
+
+
+def _read_states(filepath):
+    """Per i modelli di Minecraft: (palette di stati, indice per blocco, width,
+    length, da_1.12). Il .schematic 1.12 viene convertito in stati moderni."""
+    nbtfile = _open_nbt(filepath)
+    if is_sponge(nbtfile):
+        indices, palette, width, length = read_schem_states(nbtfile)
+        return palette, indices, width, length, False
+    blocks, data, width, length, _unknown = _legacy_arrays(nbtfile)
+    keys = fastjoin.int_array(blocks) * _KEY + (fastjoin.int_array(data) & (_KEY - 1))
+    unique, indices = np.unique(keys, return_inverse=True)
+    palette = []
+    for key in unique.tolist():
+        block_id, metadata = key // _KEY, key % _KEY
+        state = "minecraft:air" if block_id == 0 else state_of_legacy(block_id, metadata)
+        palette.append(state or "minecraft:legacy_id_%d" % block_id)  # senza equivalente: magenta
+    return palette, indices, width, length, True
+
+
+def _open_nbt(filepath):
     ext = os.path.splitext(filepath)[1].lower()
     if ext == ".litematic":
         raise IOError("I file Litematica (.litematic) non sono supportati")
     if ext not in EXTENSIONS:
         raise IOError("Il file selezionato non e' un .schematic o .schem")
-    nbtfile = nbt.nbt.NBTFile(filepath, "rb")
-    if is_sponge(nbtfile):
-        return read_schem(nbtfile)
+    return nbt.nbt.NBTFile(filepath, "rb")
+
+
+def _legacy_arrays(nbtfile):
     for key in ("Blocks", "Data", "Width", "Length"):
         if key not in nbtfile:
             raise IOError("file .schematic non valido: manca il campo %s" % key)
@@ -130,18 +141,23 @@ class SCHEMATIC_OT_run(Operator):
     _blockManager = BlockManager()
 
     def _setup(self, context):
+        self._job = None
+        path = compat.assets_path()
+        if path:  # modelli e texture di Minecraft dal client.jar / resource pack
+            self._setup_models(context, path)
+            return
         (self._blocks, self._data, self._width, self._length,
          self._unknown) = _read_schematic(self.filepath)
         self._missing = {}  # nome -> quanti blocchi moderni senza modello
         self._index = 0
-        blocks = _int_array(self._blocks)
+        blocks = fastjoin.int_array(self._blocks)
         self._count = int(np.count_nonzero(blocks))
         if self.mode == "JOIN":
             # un esemplare per ogni (id, metadata), poi una mesh sola (fastjoin)
             filled = np.flatnonzero(blocks)
-            keys = blocks[filled] * _KEY + (_int_array(self._data)[filled] & (_KEY - 1))
+            keys = blocks[filled] * _KEY + (fastjoin.int_array(self._data)[filled] & (_KEY - 1))
             self._join_keys, inverse = np.unique(keys, return_inverse=True)
-            cells = _cells(filled, self._width, self._length)
+            cells = fastjoin.cells(filled, self._width, self._length)
             order = np.argsort(inverse, kind="stable")
             bounds = np.searchsorted(inverse[order], np.arange(len(self._join_keys) + 1))
             self._join_cells = {int(k): cells[order[bounds[i]:bounds[i + 1]]]
@@ -151,6 +167,44 @@ class SCHEMATIC_OT_run(Operator):
         else:
             self._total = len(self._blocks)
         _prepare_scene(context.scene)
+
+    def _setup_models(self, context, path):
+        try:
+            assets = mcassets.Assets([path])
+        except (IOError, OSError) as error:
+            raise IOError("Minecraft Assets nelle preferenze: %s" % error)
+        if not assets.has_blockstates():
+            assets.close()
+            raise IOError("Minecraft Assets nelle preferenze: niente modelli dei blocchi in %s" % path)
+        palette, indices, width, length, legacy = _read_states(self.filepath)
+        self._job = mcimport.Job(assets, palette, indices, width, length, legacy)
+        self._count, self._index, self._missing = self._job.count, 0, {}
+        self._total = self._job.steps() + (math.ceil(self._count / _CHUNK) if self.mode == "INSTANCE" else 0)
+        self._run = self._job_steps(context)
+        _prepare_scene(context.scene)
+
+    def _job_steps(self, context):
+        yield from self._job.run()
+        if self.mode != "INSTANCE":
+            return
+        name = os.path.splitext(os.path.basename(self.filepath))[0]
+        collection = bpy.data.collections.new(name)
+        context.collection.children.link(collection)
+        made = 0
+        for key, cells in self._job.cells.items():
+            t = self._job.templates[key]
+            if not t.corners or not len(cells):
+                continue
+            mesh = mcimport.template_mesh(t, self._job.materials)
+            short = t.name.split(":", 1)[-1]
+            for x, y, z in cells.tolist():
+                ob = bpy.data.objects.new(short, mesh)
+                ob.location = (x, y, z)
+                ob["mc_state"] = t.state
+                collection.objects.link(ob)
+                made += 1
+                if made % _CHUNK == 0:
+                    yield
 
     def _make(self, x, y, z, block_id, metadata):
         if block_id < 0:  # blocco moderno (.schem) senza equivalente: cubo magenta col suo nome
@@ -189,6 +243,14 @@ class SCHEMATIC_OT_run(Operator):
 
     def _summary(self):
         text = "Importati %d blocchi (%s)" % (self._count, self.mode.lower())
+        if self._job is not None:
+            labels = {"unknown": "senza modello, in magenta", "entity": "non disegnati (entita')",
+                      "entity_box": "approssimati con una scatola", "fluid": "fluidi a blocco pieno"}
+            for note, names in sorted(self._job.report().items()):
+                shown = ", ".join(sorted(names, key=names.get, reverse=True)[:4])
+                more = " e altri %d" % (len(names) - 4) if len(names) > 4 else ""
+                text += "; %s: %s%s" % (labels[note], shown, more)
+            return text
         if self._missing:
             names = sorted(self._missing, key=self._missing.get, reverse=True)
             shown = ", ".join(n.replace("minecraft:", "") for n in names[:5])
@@ -202,6 +264,13 @@ class SCHEMATIC_OT_run(Operator):
         Instance: piazza i blocchi. Join: crea gli esemplari, uno per tipo.
         """
         deadline = None if budget_seconds is None else time.perf_counter() + budget_seconds
+        if self._job is not None:
+            for _ in self._run:
+                self._index = min(self._index + 1, self._total - 1)
+                if deadline is not None and time.perf_counter() >= deadline:
+                    return False
+            self._index = self._total
+            return True
         while self._index < self._total:
             if self.mode == "JOIN":
                 self._template(int(self._join_keys[self._index]))
@@ -215,6 +284,19 @@ class SCHEMATIC_OT_run(Operator):
         return self._index >= self._total
 
     def _finish(self, context):
+        if self._job is not None:
+            if self.mode == "JOIN":
+                mesh = mcimport.build_join("Schematic", self._job.cells, self._job.templates,
+                                           self._job.materials)
+                joined = bpy.data.objects.new("Schematic", mesh)
+                context.collection.objects.link(joined)
+                context.view_layer.update()
+                for ob in context.view_layer.objects:
+                    ob.select_set(False)
+                joined.select_set(True)
+                context.view_layer.objects.active = joined
+            self._job.assets.close()
+            return
         if self.mode != "JOIN":
             return
         mesh = fastjoin.build_mesh("Schematic", self._join_cells, self._templates)
@@ -307,6 +389,11 @@ class SCHEMATIC_OT_open_textures(Operator):
 class SCHEMATIC_AP_preferences(AddonPreferences):
     bl_idname = __package__
 
+    assets_path: StringProperty(
+        name="Minecraft Assets", subtype="FILE_PATH",
+        description="client.jar di Minecraft (.minecraft/versions/<versione>/<versione>.jar), "
+                    "un resource pack .zip o una cartella con assets/: modelli e texture "
+                    "di tutti i blocchi di quella versione. Vuoto: i modelli dell'addon (1.12)")
     texture_dir: StringProperty(
         name="Texture Folder", subtype="DIR_PATH",
         description="Cartella con le texture dei blocchi (nomi 1.12, es. stone.png). "
@@ -314,6 +401,11 @@ class SCHEMATIC_AP_preferences(AddonPreferences):
 
     def draw(self, context):
         layout = self.layout
+        box = layout.box()
+        box.prop(self, "assets_path")
+        status = compat.assets_status(self.assets_path)
+        box.label(text=status[0], icon=status[1])
+        layout.label(text="Senza Minecraft Assets: modelli dell'addon (1.12) e queste texture:")
         layout.prop(self, "texture_dir")
         used = compat.texture_dir()
         count = (sum(1 for n in os.listdir(used) if n.lower().endswith(".png"))
