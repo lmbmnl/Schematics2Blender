@@ -62,6 +62,11 @@ put("blockstates/cobblestone_wall.json", {"multipart": [
     {"when": {"west": "low"}, "apply": {"model": "minecraft:block/wall_side", "y": 270, "uvlock": True}},
 ]})
 
+# lastra: blocco diverso con la stessa texture della pietra
+put("blockstates/stone_slab.json", {"variants": {"": {"model": "minecraft:block/stone_slab"}}})
+put("models/block/stone_slab.json", {"textures": {"t": "minecraft:block/stone"}, "elements": [
+    {"from": [0, 0, 0], "to": [16, 8, 16], "faces": {d: {"texture": "#t"} for d in faces}}]})
+
 addon.compat.assets_path = lambda: ASSETS  # come se fosse scelto nelle preferenze
 addon.register()
 
@@ -106,6 +111,19 @@ assert parts[0].users_collection[0].name == "mixed"
 part_faces = sorted((round(p.center.x, 4), round(p.center.y, 4), round(p.center.z, 4),
                      ob.data.materials[p.material_index].name) for ob in parts for p in ob.data.polygons)
 assert part_faces == whole_faces and all(not ob.data.validate() for ob in parts)
+
+# Join by Block: un oggetto per tipo, chiuso (le facce tra tipi diversi restano)
+blocks = run(mixed, "JOIN_BLOCK")  # pietra, vetro, pietra
+base = lambda ob: ob.name.split(".")[0]  # noqa: E731  ("stone.001": mesh omonime di import precedenti)
+assert sorted((base(ob), len(ob.data.polygons)) for ob in blocks) == [("glass", 6), ("stone", 12)]
+assert blocks[0].users_collection[0].name.startswith("mixed") and all(not ob.data.validate() for ob in blocks)
+(paired,) = run(two, "JOIN_BLOCK")  # due pietre accanto: la faccia in mezzo sparisce
+assert base(paired) == "stone" and len(paired.data.polygons) == 10
+# blocchi diversi con la stessa texture: oggetti diversi, stesso materiale
+slab = write("slab.schem", ts.sponge(["minecraft:air", "minecraft:stone", "minecraft:stone_slab"], [1, 2], 2, 1, 1))
+kinds = {base(ob): ob for ob in run(slab, "JOIN_BLOCK")}
+assert sorted(kinds) == ["stone", "stone_slab"]
+assert kinds["stone"].data.materials[0] == kinds["stone_slab"].data.materials[0]
 
 # blocco senza blockstate (mod): cubo magenta
 (odd,) = run(write("odd.schem", ts.sponge(states, [2], 1, 1, 1)), "JOIN")

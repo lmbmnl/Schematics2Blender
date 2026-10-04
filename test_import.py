@@ -148,10 +148,26 @@ clear()
 assert Counter(f[:3] for f in faces_of([mixed])) == expected
 assert not mixed.data.validate()
 
+# Join by Block (1.12): un oggetto per tipo, chiuso; un tipo solo = come Join
+clear()
+(only,) = new_objects(lambda: bpy.ops.import_scene.schematic_run(filepath=cube, mode="JOIN_BLOCK"))
+base = lambda ob: ob.name.split(".")[0]  # noqa: E731  ("stone.001": mesh omonime di import precedenti)
+assert base(only) == "stone" and len(only.data.polygons) == 2 * (6 * 5 + 6 * 4 + 5 * 4)
+two_kinds = write("two_kinds.schematic", legacy([1, 3], [0, 0], 2, 1, 1))  # pietra e terra accanto
+clear()
+kinds = new_objects(lambda: bpy.ops.import_scene.schematic_run(filepath=two_kinds, mode="JOIN_BLOCK"))
+assert sorted((base(ob), len(ob.data.polygons)) for ob in kinds) == [("dirt", 6), ("stone", 6)]
+clear()
+by_block = new_objects(lambda: bpy.ops.import_scene.schematic_run(filepath=mix, mode="JOIN_BLOCK"))
+block_meshes = [ob for ob in by_block if ob.users_collection[0].name.startswith("mix")]
+assert len({ob.name for ob in block_meshes}) == len(block_meshes)
+assert all(not ob.data.validate() for ob in block_meshes if ob.type == "MESH")
+assert sum(len(ob.data.polygons) for ob in block_meshes) >= sum(expected.values())  # >= facce del Join
+
 # Join by Material: le stesse facce del Join, un oggetto per materiale
 clear()
 parts = new_objects(lambda: bpy.ops.import_scene.schematic_run(filepath=mix, mode="JOIN_MATERIAL"))
-meshes = [ob for ob in parts if ob.type == "MESH" and ob.users_collection[0].name == "mix"]
+meshes = [ob for ob in parts if ob.type == "MESH" and ob.users_collection[0].name.startswith("mix")]
 assert Counter(f[:3] for f in faces_of(meshes)) == expected
 assert all(len(ob.data.materials) == 1 and not ob.data.validate() for ob in meshes)
 assert len({ob.data.materials[0].name for ob in meshes}) == len(meshes)

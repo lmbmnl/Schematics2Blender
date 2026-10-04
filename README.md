@@ -51,7 +51,7 @@ texture folder below.
 Blender > Edit > Preferences > Get Extensions > the arrow menu at the top right >
 **Install from Disk...** and pick the zip. Then **File > Import > Minecraft Schematic**.
 
-Three import modes:
+Four import modes:
 - **Instance**: one object per block (with Minecraft Assets: in a collection named
   after the file, blocks of the same state share one mesh).
 - **Join**: one mesh for the whole schematic; faces hidden between touching blocks
@@ -60,6 +60,12 @@ Three import modes:
   faces with the same texture in one mesh), in a collection named after the file.
   A block with several textures (grass block: top, side, dirt) ends up in several
   objects.
+- **Join by Block**: one object per block type (every oak stair, in any direction,
+  in `oak_stairs`; a crafting table with its materials in `crafting_table`), in a
+  collection named after the file. Different blocks with the same texture (planks,
+  stairs, slabs) are different objects sharing one material. Each object is closed:
+  only faces between blocks of the same type are removed, so hiding one type leaves
+  no holes in the others.
 
 ## Textures
 Minecraft's block textures belong to Mojang and are not included. The add-on

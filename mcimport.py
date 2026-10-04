@@ -301,6 +301,26 @@ def build_join(name, cells_by_template, templates, materials):
     return mesh
 
 
+def build_join_blocks(cells_by_template, templates, materials):
+    """Join by Block: una mesh per tipo di blocco (tutte le oak_stairs, in ogni
+    direzione, in una mesh; il tavolo da lavoro con i suoi 3 materiali in un'altra).
+    Ogni mesh e' un guscio chiuso: spariscono solo le facce tra blocchi dello
+    stesso tipo, cosi' nascondendo un tipo gli altri non hanno buchi.
+    Blocchi diversi con la stessa texture: mesh diverse, stesso materiale."""
+    groups = {}
+    for key, cells in cells_by_template.items():
+        if len(cells) and templates[key].corners:
+            groups.setdefault(templates[key].name, {})[key] = cells
+    meshes = []
+    for name in sorted(groups):
+        mesh = build_join(name.split(":", 1)[-1], groups[name], templates, materials)
+        if len(mesh.polygons):
+            meshes.append(mesh)
+        else:
+            bpy.data.meshes.remove(mesh)
+    return meshes
+
+
 def build_join_parts(cells_by_template, templates, materials):
     """Join by Material: [(materiale, mesh)], una mesh per materiale, con le
     stesse facce del Join (costruite direttamente, senza dividere la mesh unica)."""

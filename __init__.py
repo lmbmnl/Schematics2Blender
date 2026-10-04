@@ -26,8 +26,11 @@ MODE_ITEMS = [
     ("JOIN", "Join", "Unisce tutti i blocchi in una mesh sola e salda i vertici sovrapposti"),
     ("JOIN_MATERIAL", "Join by Material",
      "Come Join, ma un oggetto per materiale: le facce con la stessa texture in una mesh"),
+    ("JOIN_BLOCK", "Join by Block",
+     "Un oggetto per tipo di blocco (tutte le scale di quercia in una mesh), ognuno chiuso"),
 ]
-_JOINS = ("JOIN", "JOIN_MATERIAL")  # costruiti con una mesh sola (poi divisa per materiale)
+_JOINS = ("JOIN", "JOIN_MATERIAL", "JOIN_BLOCK")  # un esemplare per tipo, poi mesh costruite insieme
+_SPLIT = ("JOIN_MATERIAL", "JOIN_BLOCK")  # piu' oggetti, in una collezione col nome del file
 
 
 EXTENSIONS = (".schematic", ".schem")
@@ -113,7 +116,7 @@ class SCHEMATIC_OT_mode(Operator):
     def invoke(self, context, event):
         # invoke_popup: solo i due pulsanti, senza l'OK di invoke_props_dialog
         # (che in 5.2 non accetta confirm=False)
-        return context.window_manager.invoke_popup(self, width=420)
+        return context.window_manager.invoke_popup(self, width=520)
 
     def draw(self, context):
         col = self.layout.column()
@@ -128,6 +131,7 @@ class SCHEMATIC_OT_mode(Operator):
         col.separator()
         col.label(text="Join: una mesh sola, vertici sovrapposti saldati", icon="INFO")
         col.label(text="Join by Material: un oggetto per ogni materiale (texture)", icon="MATERIAL")
+        col.label(text="Join by Block: un oggetto per ogni tipo di blocco", icon="MESH_CUBE")
 
     def execute(self, context):
         return {"CANCELLED"}
@@ -295,6 +299,9 @@ class SCHEMATIC_OT_run(Operator):
             if self.mode == "JOIN_MATERIAL":
                 parts = mcimport.build_join_parts(self._job.cells, self._job.templates, self._job.materials)
                 self._meshes.extend(self._link_join(context, [mesh for _material, mesh in parts]))
+            elif self.mode == "JOIN_BLOCK":
+                meshes = mcimport.build_join_blocks(self._job.cells, self._job.templates, self._job.materials)
+                self._meshes.extend(self._link_join(context, meshes))
             elif self.mode == "JOIN":
                 mesh = mcimport.build_join("Schematic", self._job.cells, self._job.templates,
                                            self._job.materials)
@@ -305,17 +312,34 @@ class SCHEMATIC_OT_run(Operator):
             return
         if self.mode not in _JOINS:
             return
-        mesh = fastjoin.build_mesh("Schematic", self._join_cells, self._templates)
+        if self.mode == "JOIN_BLOCK":  # una mesh per tipo, chiusa (vedi mcimport.build_join_blocks)
+            groups = {}
+            for key, cells in self._join_cells.items():
+                if key in self._templates:
+                    groups.setdefault(self._block_name(key), {})[key] = cells
+            mesh = [fastjoin.build_mesh(name, cells, {k: self._templates[k] for k in cells})
+                    for name, cells in sorted(groups.items())]
+        else:
+            mesh = fastjoin.build_mesh("Schematic", self._join_cells, self._templates)
         for key in self._separate:  # blocchi con dati sull'oggetto: restano separati
             for x, y, z in self._join_cells[key].tolist():
                 self._make(x, y, z, key // _KEY, key % _KEY)
         self._link_join(context, mesh)
 
+    def _block_name(self, key):
+        """Nome del tipo di blocco di una chiave Join 1.12 (id * _KEY + metadata)."""
+        block_id, metadata = key // _KEY, key % _KEY
+        if block_id < 0:
+            return self._unknown[block_id].split(":", 1)[-1]
+        state = state_of_legacy(block_id, metadata)
+        return state.split("[", 1)[0].split(":", 1)[-1] if state else "block_%d" % block_id
+
     def _link_join(self, context, mesh):
-        """Join: un oggetto "Schematic". Join by Material: un oggetto per materiale,
-        in una collezione col nome del file (mesh: la mesh unica da dividere, o la
-        lista delle mesh gia' divise). Seleziona i nuovi oggetti; torna le mesh."""
-        if self.mode == "JOIN_MATERIAL":
+        """Join: un oggetto "Schematic". Join by Material / by Block: un oggetto per
+        materiale / per tipo, in una collezione col nome del file (mesh: la mesh
+        unica da dividere per materiale, o la lista delle mesh gia' divise).
+        Seleziona i nuovi oggetti; torna le mesh."""
+        if self.mode in _SPLIT:
             name = os.path.splitext(os.path.basename(self.filepath))[0]
             collection = bpy.data.collections.new(name)
             context.collection.children.link(collection)
