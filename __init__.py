@@ -24,7 +24,10 @@ _CHUNK = 500  # Instance con i modelli: oggetti creati per passo
 MODE_ITEMS = [
     ("INSTANCE", "Instance", "Un oggetto separato per ogni blocco"),
     ("JOIN", "Join", "Unisce tutti i blocchi in una mesh sola e salda i vertici sovrapposti"),
+    ("JOIN_MATERIAL", "Join by Material",
+     "Come Join, ma un oggetto per materiale: le facce con la stessa texture in una mesh"),
 ]
+_JOINS = ("JOIN", "JOIN_MATERIAL")  # costruiti con una mesh sola (poi divisa per materiale)
 
 
 EXTENSIONS = (".schematic", ".schem")
@@ -110,7 +113,7 @@ class SCHEMATIC_OT_mode(Operator):
     def invoke(self, context, event):
         # invoke_popup: solo i due pulsanti, senza l'OK di invoke_props_dialog
         # (che in 5.2 non accetta confirm=False)
-        return context.window_manager.invoke_popup(self, width=300)
+        return context.window_manager.invoke_popup(self, width=420)
 
     def draw(self, context):
         col = self.layout.column()
@@ -124,6 +127,7 @@ class SCHEMATIC_OT_mode(Operator):
             op.mode = mode
         col.separator()
         col.label(text="Join: una mesh sola, vertici sovrapposti saldati", icon="INFO")
+        col.label(text="Join by Material: un oggetto per ogni materiale (texture)", icon="MATERIAL")
 
     def execute(self, context):
         return {"CANCELLED"}
@@ -152,7 +156,7 @@ class SCHEMATIC_OT_run(Operator):
         self._index = 0
         blocks = fastjoin.int_array(self._blocks)
         self._count = int(np.count_nonzero(blocks))
-        if self.mode == "JOIN":
+        if self.mode in _JOINS:
             # un esemplare per ogni (id, metadata), poi una mesh sola (fastjoin)
             filled = np.flatnonzero(blocks)
             keys = blocks[filled] * _KEY + (fastjoin.int_array(self._data)[filled] & (_KEY - 1))
@@ -244,7 +248,8 @@ class SCHEMATIC_OT_run(Operator):
                 bpy.data.meshes.remove(mesh)
 
     def _summary(self):
-        text = "Importati %d blocchi (%s)" % (self._count, self.mode.lower())
+        label = next(item[1] for item in MODE_ITEMS if item[0] == self.mode)
+        text = "Importati %d blocchi (%s)" % (self._count, label)
         if self._job is not None:
             labels = {"unknown": "senza modello, in magenta", "entity": "non disegnati (entita')",
                       "entity_box": "approssimati con una scatola", "fluid": "fluidi a blocco pieno"}
@@ -274,7 +279,7 @@ class SCHEMATIC_OT_run(Operator):
             self._index = self._total
             return True
         while self._index < self._total:
-            if self.mode == "JOIN":
+            if self.mode in _JOINS:
                 self._template(int(self._join_keys[self._index]))
             else:
                 block_id = self._blocks[self._index]
@@ -287,34 +292,49 @@ class SCHEMATIC_OT_run(Operator):
 
     def _finish(self, context):
         if self._job is not None:
-            if self.mode == "JOIN":
+            if self.mode == "JOIN_MATERIAL":
+                parts = mcimport.build_join_parts(self._job.cells, self._job.templates, self._job.materials)
+                self._meshes.extend(self._link_join(context, [mesh for _material, mesh in parts]))
+            elif self.mode == "JOIN":
                 mesh = mcimport.build_join("Schematic", self._job.cells, self._job.templates,
                                            self._job.materials)
-                joined = bpy.data.objects.new("Schematic", mesh)
-                context.collection.objects.link(joined)
-                context.view_layer.update()
-                for ob in context.view_layer.objects:
-                    ob.select_set(False)
-                joined.select_set(True)
-                context.view_layer.objects.active = joined
-                self._meshes.append(mesh)
+                self._meshes.extend(self._link_join(context, mesh))
             # colori a tinta unita per le texture nuove (pannello Schematic nella vista 3D)
             colors.after_import(context.scene, self._job.materials.list, self._meshes)
             self._job.assets.close()
             return
-        if self.mode != "JOIN":
+        if self.mode not in _JOINS:
             return
         mesh = fastjoin.build_mesh("Schematic", self._join_cells, self._templates)
-        joined = bpy.data.objects.new("Schematic", mesh)
-        context.collection.objects.link(joined)
         for key in self._separate:  # blocchi con dati sull'oggetto: restano separati
             for x, y, z in self._join_cells[key].tolist():
                 self._make(x, y, z, key // _KEY, key % _KEY)
+        self._link_join(context, mesh)
+
+    def _link_join(self, context, mesh):
+        """Join: un oggetto "Schematic". Join by Material: un oggetto per materiale,
+        in una collezione col nome del file (mesh: la mesh unica da dividere, o la
+        lista delle mesh gia' divise). Seleziona i nuovi oggetti; torna le mesh."""
+        if self.mode == "JOIN_MATERIAL":
+            name = os.path.splitext(os.path.basename(self.filepath))[0]
+            collection = bpy.data.collections.new(name)
+            context.collection.children.link(collection)
+            meshes = mesh if isinstance(mesh, list) else [part for _m, part in fastjoin.split_by_material(mesh)]
+            if not meshes:  # niente da disegnare
+                meshes = [bpy.data.meshes.new("Schematic")]
+            objects = [bpy.data.objects.new(part.name, part) for part in meshes]
+            for ob in objects:
+                collection.objects.link(ob)
+        else:
+            objects = [bpy.data.objects.new("Schematic", mesh)]
+            context.collection.objects.link(objects[0])
         context.view_layer.update()  # i nuovi oggetti entrano nel view layer
         for ob in context.view_layer.objects:  # come gli importer di Blender
             ob.select_set(False)
-        joined.select_set(True)
-        context.view_layer.objects.active = joined
+        for ob in objects:
+            ob.select_set(True)
+        context.view_layer.objects.active = objects[0]
+        return [ob.data for ob in objects]
 
     # --- interattivo: modal con percentuale ---
 
@@ -356,7 +376,7 @@ class SCHEMATIC_OT_run(Operator):
             None if done
             else "Schematics2Blender: %d%% (%d/%d %s)" % (
                 percent, self._index, self._total,
-                "tipi di blocco" if self.mode == "JOIN" else "blocchi"))
+                "tipi di blocco" if self.mode in _JOINS else "blocchi"))
 
     def _cleanup(self, context):
         window_manager = context.window_manager

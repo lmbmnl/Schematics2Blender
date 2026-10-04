@@ -94,6 +94,19 @@ assert sorted(tuple(ob.location) for ob in objs) == [(-1, -1, 0), (0, -1, 0)], [
 # il secondo import riusa materiali e immagini
 assert [m.name for m in bpy.data.materials if m.name.startswith("mc stone")] == ["mc stone"]
 
+# Join by Material: pietra e vetro in due oggetti, uno per materiale
+mixed = write("mixed.schem", ts.sponge(["minecraft:air", "minecraft:stone", "minecraft:glass"],
+                                       [1, 2, 1], 3, 1, 1))
+(whole,) = run(mixed, "JOIN")
+whole_faces = sorted((round(p.center.x, 4), round(p.center.y, 4), round(p.center.z, 4),
+                      whole.data.materials[p.material_index].name) for p in whole.data.polygons)
+parts = run(mixed, "JOIN_MATERIAL")
+assert sorted(ob.name for ob in parts) == ["glass", "stone"]
+assert parts[0].users_collection[0].name == "mixed"
+part_faces = sorted((round(p.center.x, 4), round(p.center.y, 4), round(p.center.z, 4),
+                     ob.data.materials[p.material_index].name) for ob in parts for p in ob.data.polygons)
+assert part_faces == whole_faces and all(not ob.data.validate() for ob in parts)
+
 # blocco senza blockstate (mod): cubo magenta
 (odd,) = run(write("odd.schem", ts.sponge(states, [2], 1, 1, 1)), "JOIN")
 assert len(odd.data.polygons) == 6

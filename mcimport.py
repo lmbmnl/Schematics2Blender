@@ -289,9 +289,42 @@ def connect_states(cells_by_state, states, full, assets):
 
 
 def build_join(name, cells_by_template, templates, materials):
-    """Mesh unica. Una faccia con cullface sparisce se il vicino ha, sul lato che
-    la tocca, una faccia piena opaca, o e' lo stesso blocco con una faccia piena
-    (vetro accanto a vetro, acqua accanto ad acqua)."""
+    """Mesh unica (Join)."""
+    mesh = bpy.data.meshes.new(name)
+    arrays = _join_arrays(cells_by_template, templates)
+    if arrays is not None:
+        corners, sizes, uvs, mats = arrays
+        used = sorted(set(mats.tolist()))
+        remap = np.zeros(max(used) + 1, np.int64)
+        remap[used] = np.arange(len(used))
+        fastjoin.fill_mesh(mesh, corners, sizes, uvs, remap[mats], [materials.list[m] for m in used])
+    return mesh
+
+
+def build_join_parts(cells_by_template, templates, materials):
+    """Join by Material: [(materiale, mesh)], una mesh per materiale, con le
+    stesse facce del Join (costruite direttamente, senza dividere la mesh unica)."""
+    arrays = _join_arrays(cells_by_template, templates)
+    if arrays is None:
+        return []
+    corners, sizes, uvs, mats = arrays
+    loop_mat = np.repeat(mats, sizes)
+    parts = []
+    for m in sorted(set(mats.tolist())):
+        material = materials.list[m]
+        faces, loops = mats == m, loop_mat == m
+        mesh = bpy.data.meshes.new(fastjoin._part_name(material, "Schematic"))
+        fastjoin.fill_mesh(mesh, corners[loops], sizes[faces], uvs[loops],
+                           np.zeros(int(faces.sum()), np.int64), [material])
+        parts.append((material, mesh))
+    return parts
+
+
+def _join_arrays(cells_by_template, templates):
+    """Facce di tutti i blocchi (angoli, lati per faccia, UV, materiale), o None.
+    Una faccia con cullface sparisce se il vicino ha, sul lato che la tocca, una
+    faccia piena opaca, o e' lo stesso blocco con una faccia piena (vetro accanto
+    a vetro, acqua accanto ad acqua)."""
     occluders = {s: [] for s in range(6)}
     same = {}
     for key, cells in cells_by_template.items():
@@ -334,16 +367,14 @@ def build_join(name, cells_by_template, templates, materials):
             sizes.append(np.full(len(keep), k, np.int64))
             mats.append(np.full(len(keep), mat, np.int64))
             opaque.append(np.full(len(keep), solid, bool))
-    mesh = bpy.data.meshes.new(name)
-    if corners:
-        sizes = np.concatenate(sizes)
-        corners, keep = _split_coincident(np.concatenate(corners), sizes, np.concatenate(opaque))
-        sizes, uvs, mats = sizes[keep], np.concatenate(uvs)[np.repeat(keep, sizes)], [np.concatenate(mats)[keep]]
-        used = sorted(set(np.concatenate(mats).tolist()))
-        remap = np.zeros(max(used) + 1, np.int64)
-        remap[used] = np.arange(len(used))
-        fastjoin.fill_mesh(mesh, corners, sizes, uvs, remap[mats[0]], [materials.list[m] for m in used])
-    return mesh
+    if not corners:
+        return None
+    sizes = np.concatenate(sizes)
+    corners, keep = _split_coincident(np.concatenate(corners), sizes, np.concatenate(opaque))
+    if not keep.any():
+        return None
+    uvs = np.concatenate(uvs)[np.repeat(keep, sizes)]
+    return corners, sizes[keep], uvs, np.concatenate(mats)[keep]
 
 
 _GAP = 1e-4  # distacco delle facce coincidenti che restano (come mcmodels._merge_overlays)

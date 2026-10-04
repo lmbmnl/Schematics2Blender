@@ -148,6 +148,15 @@ clear()
 assert Counter(f[:3] for f in faces_of([mixed])) == expected
 assert not mixed.data.validate()
 
+# Join by Material: le stesse facce del Join, un oggetto per materiale
+clear()
+parts = new_objects(lambda: bpy.ops.import_scene.schematic_run(filepath=mix, mode="JOIN_MATERIAL"))
+meshes = [ob for ob in parts if ob.type == "MESH" and ob.users_collection[0].name == "mix"]
+assert Counter(f[:3] for f in faces_of(meshes)) == expected
+assert all(len(ob.data.materials) == 1 and not ob.data.validate() for ob in meshes)
+assert len({ob.data.materials[0].name for ob in meshes}) == len(meshes)
+assert all(ob.select_get() for ob in meshes) and bpy.context.view_layer.objects.active in meshes
+
 # texture: cartella scelta / utente / vecchio posto, anche dentro blocks/ o un resource pack
 compat = addon.compat
 pack = os.path.join(TMP, "pack")

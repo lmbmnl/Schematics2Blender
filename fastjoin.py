@@ -237,3 +237,47 @@ def fill_mesh(mesh, corners, sizes, uvs, mats, materials):
     mesh.polygons.foreach_set("material_index", np.asarray(mats).astype(np.int32))
     mesh.update()
     return mesh
+
+
+def _part_name(material, fallback):
+    if material is None:
+        return fallback
+    return material.name[3:] if material.name.startswith("mc ") else material.name
+
+
+def split_by_material(mesh):
+    """Una mesh per materiale (Join by Material): [(materiale, mesh)], nell'ordine
+    degli slot. Le facce, gli UV e le posizioni restano quelli di mesh, che viene
+    eliminata."""
+    polys = len(mesh.polygons)
+    if not polys or len(mesh.materials) < 2:
+        material = mesh.materials[0] if len(mesh.materials) else None
+        if material is not None:
+            mesh.name = _part_name(material, mesh.name)
+        return [(material, mesh)]
+    co = np.empty(len(mesh.vertices) * 3)
+    mesh.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3)
+    vert = np.empty(len(mesh.loops), np.int32)
+    mesh.loops.foreach_get("vertex_index", vert)
+    uv = np.empty(len(mesh.loops) * 2)
+    mesh.uv_layers[0].data.foreach_get("uv", uv)
+    uv = uv.reshape(-1, 2)
+    start, total, mat = (np.empty(polys, np.int32) for _ in range(3))
+    mesh.polygons.foreach_get("loop_start", start)
+    mesh.polygons.foreach_get("loop_total", total)
+    mesh.polygons.foreach_get("material_index", mat)
+    out = []
+    for slot, material in enumerate(mesh.materials):
+        faces = np.flatnonzero(mat == slot)
+        if not len(faces):
+            continue
+        sizes = total[faces]
+        # indici dei loop di queste facce, in ordine
+        offsets = np.arange(sizes.sum()) - np.repeat(np.cumsum(sizes) - sizes, sizes)
+        loops = np.repeat(start[faces], sizes) + offsets
+        part = fill_mesh(bpy.data.meshes.new(_part_name(material, mesh.name)), co[vert[loops]], sizes, uv[loops],
+                         np.zeros(len(faces), np.int64), [material])
+        out.append((material, part))
+    bpy.data.meshes.remove(mesh)
+    return out

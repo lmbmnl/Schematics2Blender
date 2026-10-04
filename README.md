@@ -49,11 +49,15 @@ texture folder below.
 Blender > Edit > Preferences > Get Extensions > the arrow menu at the top right >
 **Install from Disk...** and pick the zip. Then **File > Import > Minecraft Schematic**.
 
-Two import modes:
+Three import modes:
 - **Instance**: one object per block (with Minecraft Assets: in a collection named
   after the file, blocks of the same state share one mesh).
 - **Join**: one mesh for the whole schematic; faces hidden between touching blocks
   are left out.
+- **Join by Material**: the same faces as Join, one object per material (all the
+  faces with the same texture in one mesh), in a collection named after the file.
+  A block with several textures (grass block: top, side, dirt) ends up in several
+  objects.
 
 ## Textures
 Minecraft's block textures belong to Mojang and are not included. The add-on
