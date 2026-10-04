@@ -12,13 +12,13 @@ class Log(Block):
         self._unlocalizedName = unlocalizedName
         self._topTexture = topTexture
         self._sideTexture = self._textureName = sideTexture
+        # tronco con corteccia su tutti i lati (metadata 12-15): un blocco a parte,
+        # prima veniva rinominato l'oggetto condiviso aggiungendo " Side" ogni volta
+        self._bark = Block(id, unlocalizedName + " Side", sideTexture)
     
     def make(self, x, y, z, metadata):
         if metadata & 0xC == 0xC:
-            self._unlocalizedName += " Side"
-            obj = Block.makeObject(self, x, y, z, metadata)
-            Block.makeUVMap(self, obj, metadata)
-            Block.applyMaterial(self, obj, metadata)
+            self._bark.make(x, y, z, metadata)
         else:
             obj = Block.makeObject(self, x, y, z, metadata)
             self.makeUVMap(obj, metadata)

@@ -34,7 +34,7 @@ class BlockManager:
         self._BlockDict[id] = block
 
     def __init__(self):
-        self.addBlock(1, DataValues(1, [Block(3, "Stone", "stone"), Block(1, "Granite", "stone_granite"), Block(1, "Polished Granite", "stone_granite_smooth"), Block(1, "Diorite", "stone_diorite"), Block(1, "Polished Diorite", "stone_diorite_smooth"), Block(1, "Andesite", "stone_andesite"), Block(1, "Polished Andesite", "stone_andesite_smooth")]))
+        self.addBlock(1, DataValues(1, [Block(1, "Stone", "stone"), Block(1, "Granite", "stone_granite"), Block(1, "Polished Granite", "stone_granite_smooth"), Block(1, "Diorite", "stone_diorite"), Block(1, "Polished Diorite", "stone_diorite_smooth"), Block(1, "Andesite", "stone_andesite"), Block(1, "Polished Andesite", "stone_andesite_smooth")]))
         self.addBlock(2, Grass(2, "Grass Block", "dirt", "grass_top", "grass_side", "grass_side_overlay"))
         self.addBlock(3, DataValues(3, [Block(3, "Dirt", "dirt"), Block(3, "Coarse Dirt", "coarse_dirt"), Multitextured(3, "Podzol", "dirt", "dirt_podzol_top", "dirt_podzol_side")]))
         self.addBlock(4, Block(4, "Cobblestone", "cobblestone"))

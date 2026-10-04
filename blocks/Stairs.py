@@ -1,4 +1,6 @@
 import bpy
+
+from ..compat import fix_normals
 import mathutils
 from .Block import Block
 
@@ -18,27 +20,27 @@ class Stairs(Block):
         obj.location.x = x + 0.5
         obj.location.y = y + 0.5
         obj.location.z = z + 0.5
+        obj.blockId = self._id
+        obj.blockMetadata = metadata
         bpy.context.collection.objects.link(obj)
 
-        activeObject = bpy.context.view_layer.objects.active
-        bpy.context.view_layer.objects.active = obj
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_all(action='SELECT')
-        bpy.ops.mesh.normals_make_consistent(inside=False)
-        bpy.ops.object.editmode_toggle()
-        bpy.context.view_layer.objects.active = activeObject
+        fix_normals(mesh)
         
         self.makeUVMap(obj, metadata)
         
-        obj.rotation_euler.y = 3.1415927410125732 * (metadata >> 2 & 1)
-        obj.rotation_euler.z = 3.1415927410125732 * ((metadata & 1) + (metadata >> 2 & 1)) - 1.5707963705062866 * (metadata >> 1 & 1)
-        bpy.ops.object.select_pattern(pattern=obj.name, extend=False)
-        bpy.ops.object.transform_apply(rotation=True)
-        obj.select_set(False)
+        # stessa rotazione di prima, applicata ai vertici senza bpy.ops
+        # (select_pattern + transform_apply cambiavano anche la selezione dell'utente)
+        rotation = mathutils.Euler((
+            0.0,
+            3.1415927410125732 * (metadata >> 2 & 1),
+            3.1415927410125732 * ((metadata & 1) + (metadata >> 2 & 1)) - 1.5707963705062866 * (metadata >> 1 & 1),
+        ), "XYZ")
+        mesh.transform(rotation.to_matrix().to_4x4())
+        mesh.update()
         
         return obj
     
     def makeUVMap(self, obj, metadata):
         maps = [[0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0.5, 0.5, 0.5, 0.5, 1, 1, 1, 0.5, 1, 0.5, 0.5, 0, 0.5, 0, 0, 1, 0, 1, 1, 0.5, 1, 0.5, 0, 1, 0, 0, 1, 0, 0.5, 1, 0.5, 1, 1, 0.5, 1, 0, 1, 0, 0, 0.5, 0, 0, 0.5, 0, 0, 1, 0, 1, 0.5, 1, 1, 1, 0, 0, 0, 0, 1], [1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0.5, 0.5, 0.5, 0.5, 1, 0, 1, 0.5, 1, 0.5, 0.5, 1, 0.5, 1, 0, 0, 0, 0, 0, 0.5, 0, 0.5, 1, 0, 1, 1, 1, 1, 0.5, 0, 0.5, 0, 1, 0.5, 0, 1, 0, 1, 1, 0.5, 1, 1, 0.5, 1, 0, 0, 0, 0, 0.5, 0, 0, 0, 1, 1, 1, 1, 0], [1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0.5, 0.5, 0.5, 0.5, 1, 1, 1, 0.5, 1, 0.5, 0.5, 0, 0.5, 0, 0, 1, 0, 1, 0, 1, 0.5, 0, 0.5, 0, 0, 1, 1, 1, 0.5, 0, 0.5, 0, 1, 1, 0.5, 1, 1, 0, 1, 0, 0.5, 1, 0.5, 1, 0, 0, 0, 0, 0.5, 1, 0, 0, 0, 0, 1, 1, 1], [0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0.5, 0.5, 0.5, 0.5, 1, 0, 1, 0.5, 1, 0.5, 0.5, 1, 0.5, 1, 0, 0, 0, 0, 1, 0, 0.5, 1, 0.5, 1, 1, 0, 1, 0, 0.5, 1, 0.5, 1, 1, 0, 0.5, 0, 0, 1, 0, 1, 0.5, 0, 0.5, 0, 0, 1, 0, 1, 0.5, 0, 1, 1, 1, 1, 0, 0, 0], [1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 0.5, 0.5, 0.5, 0.5, 0, 1, 0, 0.5, 0, 0.5, 0.5, 0, 0.5, 0, 1, 1, 1, 1, 0, 0.5, 0, 0.5, 1, 1, 1, 1, 0, 1, 0.5, 0, 0.5, 0, 0, 0.5, 0, 0, 0, 0, 1, 0.5, 1, 1, 0.5, 1, 1, 0, 1, 0, 0.5, 1, 0, 1, 1, 0, 1, 0, 0], [0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 0.5, 0.5, 0.5, 0.5, 0, 0, 0, 0.5, 0, 0.5, 0.5, 1, 0.5, 1, 1, 0, 1, 0, 1, 0.5, 1, 0.5, 0, 0, 0, 0, 0, 0, 0.5, 1, 0.5, 1, 0, 0.5, 1, 1, 1, 1, 0, 0.5, 0, 0, 0.5, 0, 1, 1, 1, 1, 0.5, 0, 1, 0, 0, 1, 0, 1, 1], [0, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0, 0.5, 0.5, 0.5, 0.5, 0, 1, 0, 0.5, 0, 0.5, 0.5, 0, 0.5, 0, 1, 1, 1, 0, 0, 0, 0.5, 1, 0.5, 1, 0, 0, 0, 0, 0.5, 1, 0.5, 1, 0, 0, 0.5, 0, 1, 1, 1, 1, 0.5, 0, 0.5, 0, 1, 1, 1, 1, 0.5, 0, 0, 1, 0, 1, 1, 0, 1], [1, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0.5, 0.5, 0.5, 0.5, 0, 0, 0, 0.5, 0, 0.5, 0.5, 1, 0.5, 1, 1, 0, 1, 1, 1, 1, 0.5, 0, 0.5, 0, 1, 1, 0, 1, 0.5, 0, 0.5, 0, 0, 1, 0.5, 1, 0, 0, 0, 0, 0.5, 1, 0.5, 1, 1, 0, 1, 0, 0.5, 1, 1, 0, 1, 0, 0, 1, 0]];
         obj.data.uv_layers.new();
-        obj.data.uv_layers[0].data.foreach_set("uv", maps[metadata])
+        obj.data.uv_layers[0].data.foreach_set("uv", maps[metadata & 7])

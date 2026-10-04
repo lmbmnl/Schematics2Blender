@@ -10,6 +10,8 @@ from bpy_extras.io_utils import ImportHelper
 
 from . import nbt
 from .blockmanager import BlockManager
+from .blocks.Unknown import Unknown
+from .schem import is_sponge, read_schem
 
 # ogni tick del modal lavora ~40ms e poi restituisce il controllo a Blender,
 # cosi' la percentuale si aggiorna invece di bloccare la finestra
@@ -21,27 +23,44 @@ MODE_ITEMS = [
 ]
 
 
+EXTENSIONS = (".schematic", ".schem")
+
+
 def _read_schematic(filepath):
-    """Legge il .schematic e torna (blocks, data, width, length)."""
-    if os.path.splitext(filepath)[1].lower() != ".schematic":
-        raise IOError("Il file selezionato non e' un *.schematic")
+    """Legge .schematic (MCEdit) o .schem (Sponge, WorldEdit 1.13+).
+
+    Torna (blocks, data, width, length, unknown): id e metadata legacy per
+    blocco, unknown = {id negativo: nome} dei blocchi moderni senza modello.
+    Il formato si riconosce dal contenuto: c'e' chi salva Sponge come .schematic.
+    """
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext == ".litematic":
+        raise IOError("I file Litematica (.litematic) non sono supportati")
+    if ext not in EXTENSIONS:
+        raise IOError("Il file selezionato non e' un .schematic o .schem")
     nbtfile = nbt.nbt.NBTFile(filepath, "rb")
+    if is_sponge(nbtfile):
+        return read_schem(nbtfile)
+    for key in ("Blocks", "Data", "Width", "Length"):
+        if key not in nbtfile:
+            raise IOError("file .schematic non valido: manca il campo %s" % key)
     return (nbtfile["Blocks"].value, nbtfile["Data"],
-            nbtfile["Width"].value, nbtfile["Length"].value)
+            nbtfile["Width"].value & 0xFFFF, nbtfile["Length"].value & 0xFFFF, {})
 
 
-def _prepare_scene():
-    bpy.data.scenes[0].render.engine = "CYCLES"
-    bpy.data.scenes[0].render.fps = 20
-    bpy.data.scenes[0].render.fps_base = 1
-    bpy.types.Object.blockId = bpy.props.IntProperty(
-        name="Block ID", description="Stores the id of this object's block", default=0)
-    bpy.types.Object.blockMetadata = bpy.props.IntProperty(
-        name="Block Metadata", description="Stores the metadata of this object's block", default=0)
+def _prepare_scene(scene):
+    # scelta del progetto originale: Cycles e 20 fps (i tick di Minecraft, il fuoco
+    # anima un fotogramma per frame). Ora sulla scena corrente, non scenes[0]
+    scene.render.engine = "CYCLES"
+    scene.render.fps = 20
+    scene.render.fps_base = 1
 
 
 def join_blocks(context, objects, threshold=0.0001):
     """Unisce i blocchi in una mesh sola e salda i vertici coincidenti."""
+    # i blocchi sono appena stati collegati alla collection: senza update
+    # view_layer.objects non li contiene ancora e non verrebbe unito niente
+    context.view_layer.update()
     view_layer_objects = context.view_layer.objects
     meshes = [ob for ob in objects if ob.type == "MESH" and ob.name in view_layer_objects]
     if not meshes:
@@ -69,13 +88,13 @@ def join_blocks(context, objects, threshold=0.0001):
 
 
 class SCHEMATIC_OT_import(Operator, ImportHelper):
-    """Importa uno schematic MCEdit"""
+    """Importa uno schematic di Minecraft (.schematic MCEdit o .schem WorldEdit)"""
 
     bl_idname = "import_scene.schematic"
     bl_label = "Import Schematic"
 
     filename_ext = ".schematic"
-    filter_glob: StringProperty(default="*.schematic", options={"HIDDEN"})
+    filter_glob: StringProperty(default="*.schematic;*.schem", options={"HIDDEN"})
 
     def execute(self, context):
         return bpy.ops.import_scene.schematic_mode("INVOKE_DEFAULT", filepath=self.filepath)
@@ -123,22 +142,34 @@ class SCHEMATIC_OT_run(Operator):
     _blockManager = BlockManager()
 
     def _setup(self, context):
-        self._blocks, self._data, self._width, self._length = _read_schematic(self.filepath)
+        (self._blocks, self._data, self._width, self._length,
+         self._unknown) = _read_schematic(self.filepath)
+        self._missing = {}  # nome -> quanti blocchi moderni senza modello
         self._index = 0
         self._total = len(self._blocks)
         self._existing = {ob.name for ob in bpy.data.objects}
-        _prepare_scene()
+        _prepare_scene(context.scene)
 
     def _place(self, index, block_id):
         width, length = self._width, self._length
-        self._blockManager.draw(
-            None,
-            index % width - math.floor(width / 2),
-            length - math.floor((index % (width * length)) / width) - math.ceil(length / 2) - 1,
-            math.floor(index / (width * length)),
-            block_id,
-            self._data[index],
-        )
+        x = index % width - math.floor(width / 2)
+        y = length - math.floor((index % (width * length)) / width) - math.ceil(length / 2) - 1
+        z = math.floor(index / (width * length))
+        if block_id < 0:  # blocco moderno (.schem) senza equivalente: cubo magenta col suo nome
+            name = self._unknown[block_id]
+            self._missing[name] = self._missing.get(name, 0) + 1
+            Unknown(0, 0, "Unknown " + name.replace("minecraft:", "")).make(x, y, z, 0)
+            return
+        self._blockManager.draw(None, x, y, z, block_id, self._data[index])
+
+    def _summary(self):
+        text = "Importati %d blocchi (%s)" % (self._total, self.mode.lower())
+        if self._missing:
+            names = sorted(self._missing, key=self._missing.get, reverse=True)
+            shown = ", ".join(n.replace("minecraft:", "") for n in names[:5])
+            more = " e altri %d" % (len(names) - 5) if len(names) > 5 else ""
+            text += "; %d tipi senza modello, in magenta: %s%s" % (len(names), shown, more)
+        return text
 
     def _step(self, budget_seconds=None):
         """Piazza i blocchi successivi; torna True quando ha finito."""
@@ -189,7 +220,7 @@ class SCHEMATIC_OT_run(Operator):
 
         self._finish(context)
         self._cleanup(context)
-        self.report({"INFO"}, "Importati %d blocchi (%s)" % (self._total, self.mode.lower()))
+        self.report({"INFO"}, self._summary())
         return {"FINISHED"}
 
     def _report_progress(self, context, done=False):
@@ -215,6 +246,7 @@ class SCHEMATIC_OT_run(Operator):
             return {"CANCELLED"}
         self._step()
         self._finish(context)
+        self.report({"INFO"}, self._summary())
         return {"FINISHED"}
 
 
@@ -222,10 +254,15 @@ _CLASSES = (SCHEMATIC_OT_import, SCHEMATIC_OT_mode, SCHEMATIC_OT_run)
 
 
 def import_images_button(self, context):
-    self.layout.operator(SCHEMATIC_OT_import.bl_idname, text="MCEdit Schematic (.schematic)")
+    self.layout.operator(SCHEMATIC_OT_import.bl_idname, text="Minecraft Schematic (.schematic, .schem)")
 
 
 def register():
+    # prima venivano creati a ogni import e mai rimossi
+    bpy.types.Object.blockId = bpy.props.IntProperty(
+        name="Block ID", description="Stores the id of this object's block", default=0)
+    bpy.types.Object.blockMetadata = bpy.props.IntProperty(
+        name="Block Metadata", description="Stores the metadata of this object's block", default=0)
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_import.append(import_images_button)
@@ -235,6 +272,8 @@ def unregister():
     bpy.types.TOPBAR_MT_file_import.remove(import_images_button)
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
+    del bpy.types.Object.blockId
+    del bpy.types.Object.blockMetadata
 
 
 if __name__ == "__main__":

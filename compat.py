@@ -2,6 +2,7 @@
 
 import os
 
+import bmesh
 import bpy
 
 
@@ -18,6 +19,21 @@ def ensure_diffuse(mat):
     diffuse = nt.nodes.new("ShaderNodeBsdfDiffuse")
     diffuse.location = [0, 0]
     nt.links.new(diffuse.outputs[0], nt.nodes["Material Output"].inputs[0])
+
+
+def fix_normals(mesh):
+    """Normali verso l'esterno, come Edit Mode > Normals > Recalculate Outside.
+
+    Prima ogni blocco entrava e usciva dalla modalita' Edit con bpy.ops: lento e
+    sempre piu' lento al crescere della scena (costo quadratico sull'import).
+    normals_make_consistent esegue proprio recalc_face_normals su un bmesh.
+    """
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.update()
 
 
 def texture_dir():

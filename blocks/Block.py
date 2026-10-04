@@ -2,7 +2,7 @@ import bpy
 
 import os
 
-from ..compat import TEXTURE_ALIASES, ensure_diffuse, load_texture, texture_dir
+from ..compat import TEXTURE_ALIASES, ensure_diffuse, fix_normals, load_texture, texture_dir
 import mathutils
 
 class Block:
@@ -38,13 +38,7 @@ class Block:
         obj.blockMetadata = metadata
         bpy.context.collection.objects.link(obj)
 
-        activeObject = bpy.context.view_layer.objects.active
-        bpy.context.view_layer.objects.active = obj
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_all(action='SELECT')
-        bpy.ops.mesh.normals_make_consistent(inside=False)
-        bpy.ops.object.editmode_toggle()
-        bpy.context.view_layer.objects.active = activeObject
+        fix_normals(mesh)
         
         return obj
     

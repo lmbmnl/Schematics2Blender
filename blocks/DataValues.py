@@ -17,10 +17,10 @@ class DataValues(Block):
     def make(self, x, y, z, metadata):
         try:
             if self._blockList[metadata] is None:
-                unknownBlock = Unknown(self._id, metadata, "Unknown " + str(id))
+                unknownBlock = Unknown(self._id, metadata, "Unknown " + str(self._id))
                 unknownBlock.make(x, y, z, metadata)
             else:
                 self._blockList[metadata].make(x, y, z, metadata)
         except IndexError:
-            unknownBlock = Unknown(self._id, metadata, "Unknown " + str(id))
+            unknownBlock = Unknown(self._id, metadata, "Unknown " + str(self._id))
             unknownBlock.make(x, y, z, metadata)

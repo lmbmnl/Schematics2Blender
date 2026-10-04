@@ -14,3 +14,30 @@ This project is still in very early beta. We currently only have support for abo
 
 ## Contributing
 We welcome contributions. If you have a feature you want to add, just make a branch, do your thing, and submit a pull request when you're ready. If you need something to do, check the issues page or the TODO file. If you any problems, feel free to open a new issue and someone should get back to you soon. More details on building and testing MCEdit2Blender will come soon.
+
+## Supported files
+- `.schematic`: MCEdit / WorldEdit up to Minecraft 1.12 (numeric block ids).
+- `.schem`: Sponge Schematic v1, v2 and v3, saved by WorldEdit from Minecraft 1.13 on.
+  Modern block states are converted to the legacy ids the blocks above understand;
+  blocks with no equivalent are imported as magenta cubes named after the block
+  and listed at the end of the import.
+
+The format is detected from the file contents. `.litematic` files are not supported.
+
+## Textures
+Minecraft's block textures belong to Mojang and are not included. Put them in
+`textures/blocks/` inside the installed add-on folder, e.g. on Windows
+`%APPDATA%\Blender Foundation\Blender\<version>\extensions\user_default\mcedit2blender\textures\blocks\`.
+Missing textures show up as magenta. Reinstalling or updating the add-on replaces
+its folder, so the textures have to be copied again.
+
+## Tests
+```
+python test_nbt.py
+python test_schem.py
+blender -b --factory-startup --python test_import.py
+```
+
+## Credits
+Block state conversion table (`legacy_blocks.py`) generated from
+[PrismarineJS/minecraft-data](https://github.com/PrismarineJS/minecraft-data) (MIT).

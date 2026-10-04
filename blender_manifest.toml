@@ -1,9 +1,9 @@
 schema_version = "1.0.0"
 
 id = "mcedit2blender"
-version = "0.1.0"
+version = "0.2.0"
 name = "MCEdit2Blender"
-tagline = "Import MCEdit .schematic files as individual Minecraft blocks"
+tagline = "Import Minecraft .schematic and .schem files as blocks"
 maintainer = "MCEdit2Blender contributors"
 type = "add-on"
 
@@ -15,3 +15,9 @@ blender_version_min = "4.2.0"
 license = [
   "SPDX:GPL-3.0-or-later",
 ]
+
+[permissions]
+files = "Read Minecraft schematic files and the block textures"
+
+[build]
+paths_exclude_pattern = ["__pycache__/", "/.git/", "*.zip", "test_*.py", ".gitignore", "/textures/"]
