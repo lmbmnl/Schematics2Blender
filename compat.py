@@ -36,8 +36,54 @@ def fix_normals(mesh):
     mesh.update()
 
 
+# dentro la cartella scelta le .png possono stare anche in una di queste
+# sottocartelle; prima le piu' profonde (la radice di un resource pack ha pack.png)
+_PNG_SUBDIRS = (
+    os.path.join("assets", "minecraft", "textures", "blocks"),  # resource pack 1.8-1.12
+    os.path.join("textures", "blocks"),
+    "blocks",
+    "",
+)
+
+
+def png_folder(folder):
+    """La cartella con le .png dentro folder, o None."""
+    for sub in _PNG_SUBDIRS:
+        path = os.path.join(folder, sub)
+        if os.path.isdir(path) and any(n.lower().endswith(".png") for n in os.listdir(path)):
+            return os.path.normpath(path)
+    return None
+
+
+def user_texture_dir(create=False):
+    """Cartella texture dell'utente, fuori dall'addon: resta dopo aggiornamenti
+    e reinstallazioni. None se l'addon non e' installato come estensione."""
+    try:
+        return bpy.utils.extension_path_user(__package__, path="textures", create=create)
+    except ValueError:  # avviato dai sorgenti o dai test
+        return None
+
+
+def texture_dirs():
+    """Dove cercare le texture, in ordine."""
+    dirs = []
+    addon = bpy.context.preferences.addons.get(__package__)
+    chosen = getattr(getattr(addon, "preferences", None), "texture_dir", "")
+    if chosen:
+        dirs.append(bpy.path.abspath(chosen))  # 1. scelta nelle preferenze
+    user = user_texture_dir()
+    if user:
+        dirs.append(user)  # 2. cartella utente dell'estensione
+    dirs.append(os.path.join(os.path.dirname(__file__), "textures"))  # 3. vecchio posto
+    return dirs
+
+
 def texture_dir():
-    """Le texture stanno nell'addon, non accanto al .blend aperto."""
+    """La prima cartella che contiene delle .png (altrimenti la vecchia)."""
+    for folder in texture_dirs():
+        found = png_folder(folder)
+        if found:
+            return found
     return os.path.join(os.path.dirname(__file__), "textures", "blocks")
 
 
@@ -92,7 +138,7 @@ TEXTURE_ALIASES = {
 TEXTURE_ALIASES.update(
     {"cloth_%d" % i: "wool_colored_%s" % color for i, color in enumerate(_WOOL)})
 
-_MISSING_NAME = "mcedit2blender_missing"
+_MISSING_NAME = "schematics2blender_missing"
 
 
 def load_texture(path, image_name):
@@ -109,7 +155,7 @@ def load_texture(path, image_name):
     if placeholder is None:
         placeholder = bpy.data.images.new(_MISSING_NAME, 16, 16)
         placeholder.generated_color = (1.0, 0.0, 1.0, 1.0)
-    print("MCEdit2Blender: texture mancante, uso il placeholder:", path)
+    print("Schematics2Blender: texture mancante, uso il placeholder:", path)
     return placeholder
 
 

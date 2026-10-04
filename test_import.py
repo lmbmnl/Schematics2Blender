@@ -89,6 +89,84 @@ clear()
 joined = new_objects(lambda: bpy.ops.import_scene.schematic_run(filepath=path, mode="JOIN"))
 assert len(joined) == 1 and joined[0].name.startswith("Schematic")
 
+# JOIN costruisce la mesh direttamente: un cubo pieno 6x5x4 = solo la superficie
+cube = write("cube.schematic", legacy([1] * 120, [0] * 120, 6, 5, 4))
+clear()
+(solid,) = new_objects(lambda: bpy.ops.import_scene.schematic_run(filepath=cube, mode="JOIN"))
+assert len(solid.data.polygons) == 2 * (6 * 5 + 6 * 4 + 5 * 4) and not solid.data.validate()
+assert solid.select_get() and bpy.context.view_layer.objects.active == solid
+
+# JOIN = le facce degli oggetti INSTANCE, tolte quelle che toccano una faccia
+# non trasparente di un altro blocco (stesse posizioni, UV e materiali)
+import random  # noqa: E402
+from collections import Counter  # noqa: E402
+
+random.seed(7)
+ids = sorted(addon.blockmanager.BlockManager._BlockDict)
+W, H, L = 6, 5, 6
+mb, md = [], []
+for _ in range(W * H * L):
+    r = random.random()
+    mb.append(0 if r < 0.15 else 1 if r < 0.5 else random.choice(ids))
+    md.append(random.randrange(16))
+mix = write("mix.schematic", legacy(mb, md, W, H, L))
+
+
+def faces_of(objs):
+    out = []
+    for ob in objs:
+        me, mw = ob.data, ob.matrix_basis
+        uv = me.uv_layers[0].data
+        for poly in me.polygons:
+            loops = range(poly.loop_start, poly.loop_start + poly.loop_total)
+            corners = tuple(tuple(round(c, 6) for c in (mw @ me.vertices[me.loops[i].vertex_index].co))
+                            for i in loops)
+            out.append((corners, tuple(tuple(round(c, 4) for c in uv[i].uv) for i in loops),
+                        me.materials[poly.material_index].name, ob))
+    return out
+
+
+def clear_material(ob):
+    return any(n.type == "BSDF_TRANSPARENT" for m in ob.data.materials for n in m.node_tree.nodes)
+
+
+clear()
+inst = faces_of(new_objects(lambda: bpy.ops.import_scene.schematic_run(filepath=mix, mode="INSTANCE")))
+solid_owner = {f[3]: not clear_material(f[3]) for f in inst}
+
+
+def hidden(f):
+    a = sorted(f[0])
+    return any(g[3] is not f[3] and solid_owner[g[3]] and len(g[0]) == len(a)
+               and max(abs(p - q) for u, v in zip(a, sorted(g[0])) for p, q in zip(u, v)) < 6e-5
+               for g in inst)
+
+
+expected = Counter(f[:3] for f in inst if not hidden(f))
+clear()
+(mixed,) = new_objects(lambda: bpy.ops.import_scene.schematic_run(filepath=mix, mode="JOIN"))
+assert Counter(f[:3] for f in faces_of([mixed])) == expected
+assert not mixed.data.validate()
+
+# texture: cartella scelta / utente / vecchio posto, anche dentro blocks/ o un resource pack
+compat = addon.compat
+pack = os.path.join(TMP, "pack")
+deep = os.path.join(pack, "assets", "minecraft", "textures", "blocks")
+os.makedirs(deep)
+for folder in (pack, deep):
+    open(os.path.join(folder, "pack.png" if folder == pack else "stone.png"), "wb").write(b"x")
+assert compat.png_folder(pack) == deep  # non la radice con pack.png
+flat = os.path.join(TMP, "flat")
+os.makedirs(flat)
+open(os.path.join(flat, "stone.png"), "wb").write(b"x")
+assert compat.png_folder(flat) == flat and compat.png_folder(os.path.join(TMP, "none")) is None
+assert compat.user_texture_dir() is None  # avviato dai sorgenti, non come estensione
+assert compat.texture_dirs()[-1] == os.path.join(HERE, "textures")
+real_dirs = compat.texture_dirs
+compat.texture_dirs = lambda: [os.path.join(TMP, "none"), pack, flat]
+assert compat.texture_dir() == deep
+compat.texture_dirs = real_dirs
+
 # formati non supportati / file rotti: errore leggibile, niente oggetti
 for bad_name, data in (("x.litematic", b"x"), ("broken.schem", ts.sponge(states, indices[:-1], w, h, l))):
     p = write(bad_name, data)

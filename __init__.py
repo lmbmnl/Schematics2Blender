@@ -2,13 +2,13 @@ import math
 import os
 import time
 
-import bmesh
 import bpy
+import numpy as np
 from bpy.props import EnumProperty, StringProperty
-from bpy.types import Operator
+from bpy.types import AddonPreferences, Operator
 from bpy_extras.io_utils import ImportHelper
 
-from . import nbt
+from . import compat, fastjoin, nbt
 from .blockmanager import BlockManager
 from .blocks.Unknown import Unknown
 from .schem import is_sponge, read_schem
@@ -16,6 +16,25 @@ from .schem import is_sponge, read_schem
 # ogni tick del modal lavora ~40ms e poi restituisce il controllo a Blender,
 # cosi' la percentuale si aggiorna invece di bloccare la finestra
 _TICK_SECONDS = 0.04
+
+_KEY = 4096  # chiave Join = id * _KEY + metadata
+
+
+def _int_array(values):
+    """Blocks / Data del file (bytearray, Tag NBT o lista) -> array int64."""
+    values = getattr(values, "value", values)
+    if isinstance(values, (bytes, bytearray)):
+        return np.frombuffer(bytes(values), np.uint8).astype(np.int64)
+    return np.asarray(values, np.int64)
+
+
+def _cells(index, width, length):
+    """Indici del file -> celle (x, y, z) di Blender, come SCHEMATIC_OT_run._place."""
+    x = index % width - width // 2
+    y = length - (index % (width * length)) // width - (length + 1) // 2 - 1
+    z = index // (width * length)
+    return np.stack((x, y, z), axis=1)
+
 
 MODE_ITEMS = [
     ("INSTANCE", "Instance", "Un oggetto separato per ogni blocco"),
@@ -54,37 +73,6 @@ def _prepare_scene(scene):
     scene.render.engine = "CYCLES"
     scene.render.fps = 20
     scene.render.fps_base = 1
-
-
-def join_blocks(context, objects, threshold=0.0001):
-    """Unisce i blocchi in una mesh sola e salda i vertici coincidenti."""
-    # i blocchi sono appena stati collegati alla collection: senza update
-    # view_layer.objects non li contiene ancora e non verrebbe unito niente
-    context.view_layer.update()
-    view_layer_objects = context.view_layer.objects
-    meshes = [ob for ob in objects if ob.type == "MESH" and ob.name in view_layer_objects]
-    if not meshes:
-        return None
-    view_layer_objects.active = meshes[0]
-    if len(meshes) > 1:
-        # temp_override: join() funziona anche chiamato da un timer modal,
-        # dove il contesto non ha la selezione della viewport
-        with context.temp_override(active_object=meshes[0], object=meshes[0],
-                                   selected_objects=meshes,
-                                   selected_editable_objects=meshes):
-            bpy.ops.object.join()
-    joined = meshes[0]
-
-    # merge by distance con bmesh: non serve passare per la modalita' Edit,
-    # che da un timer modal non e' sempre disponibile
-    bm = bmesh.new()
-    bm.from_mesh(joined.data)
-    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=threshold)
-    bm.to_mesh(joined.data)
-    bm.free()
-    joined.data.update()
-    joined.name = "Schematic"
-    return joined
 
 
 class SCHEMATIC_OT_import(Operator, ImportHelper):
@@ -146,24 +134,61 @@ class SCHEMATIC_OT_run(Operator):
          self._unknown) = _read_schematic(self.filepath)
         self._missing = {}  # nome -> quanti blocchi moderni senza modello
         self._index = 0
-        self._total = len(self._blocks)
-        self._existing = {ob.name for ob in bpy.data.objects}
+        blocks = _int_array(self._blocks)
+        self._count = int(np.count_nonzero(blocks))
+        if self.mode == "JOIN":
+            # un esemplare per ogni (id, metadata), poi una mesh sola (fastjoin)
+            filled = np.flatnonzero(blocks)
+            keys = blocks[filled] * _KEY + (_int_array(self._data)[filled] & (_KEY - 1))
+            self._join_keys, inverse = np.unique(keys, return_inverse=True)
+            cells = _cells(filled, self._width, self._length)
+            order = np.argsort(inverse, kind="stable")
+            bounds = np.searchsorted(inverse[order], np.arange(len(self._join_keys) + 1))
+            self._join_cells = {int(k): cells[order[bounds[i]:bounds[i + 1]]]
+                                for i, k in enumerate(self._join_keys)}
+            self._templates, self._separate = {}, []
+            self._total = len(self._join_keys)
+        else:
+            self._total = len(self._blocks)
         _prepare_scene(context.scene)
+
+    def _make(self, x, y, z, block_id, metadata):
+        if block_id < 0:  # blocco moderno (.schem) senza equivalente: cubo magenta col suo nome
+            name = self._unknown[block_id]
+            Unknown(0, 0, "Unknown " + name.replace("minecraft:", "")).make(x, y, z, 0)
+        else:
+            self._blockManager.draw(None, x, y, z, block_id, metadata)
 
     def _place(self, index, block_id):
         width, length = self._width, self._length
         x = index % width - math.floor(width / 2)
         y = length - math.floor((index % (width * length)) / width) - math.ceil(length / 2) - 1
         z = math.floor(index / (width * length))
-        if block_id < 0:  # blocco moderno (.schem) senza equivalente: cubo magenta col suo nome
+        if block_id < 0:
             name = self._unknown[block_id]
             self._missing[name] = self._missing.get(name, 0) + 1
-            Unknown(0, 0, "Unknown " + name.replace("minecraft:", "")).make(x, y, z, 0)
-            return
-        self._blockManager.draw(None, x, y, z, block_id, self._data[index])
+        self._make(x, y, z, block_id, self._data[index])
+
+    def _template(self, key):
+        """Crea un esemplare del blocco, ne copia la mesh e lo elimina."""
+        block_id, metadata = key // _KEY, key % _KEY
+        if block_id < 0:
+            name = self._unknown[block_id]
+            self._missing[name] = self._missing.get(name, 0) + len(self._join_cells[key])
+        before = set(bpy.data.objects)
+        self._make(0, 0, 0, block_id, metadata)
+        for ob in [ob for ob in bpy.data.objects if ob not in before]:
+            if fastjoin.separate_reason(ob) is None and key not in self._templates:
+                self._templates[key] = fastjoin.make_template(ob, (0.5, 0.5, 0.5))
+            elif key not in self._templates:
+                self._separate.append(key)  # resta un oggetto per blocco
+            mesh = ob.data if ob.type == "MESH" else None
+            bpy.data.objects.remove(ob)
+            if mesh is not None and mesh.users == 0:
+                bpy.data.meshes.remove(mesh)
 
     def _summary(self):
-        text = "Importati %d blocchi (%s)" % (self._total, self.mode.lower())
+        text = "Importati %d blocchi (%s)" % (self._count, self.mode.lower())
         if self._missing:
             names = sorted(self._missing, key=self._missing.get, reverse=True)
             shown = ", ".join(n.replace("minecraft:", "") for n in names[:5])
@@ -172,23 +197,37 @@ class SCHEMATIC_OT_run(Operator):
         return text
 
     def _step(self, budget_seconds=None):
-        """Piazza i blocchi successivi; torna True quando ha finito."""
+        """Avanza l'import; torna True quando ha finito.
+
+        Instance: piazza i blocchi. Join: crea gli esemplari, uno per tipo.
+        """
         deadline = None if budget_seconds is None else time.perf_counter() + budget_seconds
         while self._index < self._total:
-            block_id = self._blocks[self._index]
-            if block_id != 0:
-                self._place(self._index, block_id)
+            if self.mode == "JOIN":
+                self._template(int(self._join_keys[self._index]))
+            else:
+                block_id = self._blocks[self._index]
+                if block_id != 0:
+                    self._place(self._index, block_id)
             self._index += 1
             if deadline is not None and time.perf_counter() >= deadline:
                 break
         return self._index >= self._total
 
-    def _new_objects(self):
-        return [ob for ob in bpy.data.objects if ob.name not in self._existing]
-
     def _finish(self, context):
-        if self.mode == "JOIN":
-            join_blocks(context, self._new_objects())
+        if self.mode != "JOIN":
+            return
+        mesh = fastjoin.build_mesh("Schematic", self._join_cells, self._templates)
+        joined = bpy.data.objects.new("Schematic", mesh)
+        context.collection.objects.link(joined)
+        for key in self._separate:  # blocchi con dati sull'oggetto: restano separati
+            for x, y, z in self._join_cells[key].tolist():
+                self._make(x, y, z, key // _KEY, key % _KEY)
+        context.view_layer.update()  # i nuovi oggetti entrano nel view layer
+        for ob in context.view_layer.objects:  # come gli importer di Blender
+            ob.select_set(False)
+        joined.select_set(True)
+        context.view_layer.objects.active = joined
 
     # --- interattivo: modal con percentuale ---
 
@@ -228,7 +267,9 @@ class SCHEMATIC_OT_run(Operator):
         context.window_manager.progress_update(percent)
         context.workspace.status_text_set(
             None if done
-            else "MCEdit2Blender: %d%% (%d/%d blocchi)" % (percent, self._index, self._total))
+            else "Schematics2Blender: %d%% (%d/%d %s)" % (
+                percent, self._index, self._total,
+                "tipi di blocco" if self.mode == "JOIN" else "blocchi"))
 
     def _cleanup(self, context):
         window_manager = context.window_manager
@@ -250,7 +291,42 @@ class SCHEMATIC_OT_run(Operator):
         return {"FINISHED"}
 
 
-_CLASSES = (SCHEMATIC_OT_import, SCHEMATIC_OT_mode, SCHEMATIC_OT_run)
+class SCHEMATIC_OT_open_textures(Operator):
+    """Apre la cartella delle texture (la crea se serve)"""
+
+    bl_idname = "import_scene.schematic_open_textures"
+    bl_label = "Open Texture Folder"
+
+    def execute(self, context):
+        path = compat.user_texture_dir(create=True) or compat.texture_dir()
+        os.makedirs(path, exist_ok=True)
+        bpy.ops.wm.path_open(filepath=path)
+        return {"FINISHED"}
+
+
+class SCHEMATIC_AP_preferences(AddonPreferences):
+    bl_idname = __package__
+
+    texture_dir: StringProperty(
+        name="Texture Folder", subtype="DIR_PATH",
+        description="Cartella con le texture dei blocchi (nomi 1.12, es. stone.png). "
+                    "Vuota: la cartella texture dell'utente, che resta dopo gli aggiornamenti")
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "texture_dir")
+        used = compat.texture_dir()
+        count = (sum(1 for n in os.listdir(used) if n.lower().endswith(".png"))
+                 if os.path.isdir(used) else 0)
+        col = layout.column(align=True)
+        col.label(text="In uso: " + used, icon="TEXTURE")
+        col.label(text="%d texture trovate" % count if count else
+                  "Nessuna texture: i blocchi saranno magenta", icon="INFO")
+        layout.operator(SCHEMATIC_OT_open_textures.bl_idname, icon="FILE_FOLDER")
+
+
+_CLASSES = (SCHEMATIC_AP_preferences, SCHEMATIC_OT_open_textures,
+            SCHEMATIC_OT_import, SCHEMATIC_OT_mode, SCHEMATIC_OT_run)
 
 
 def import_images_button(self, context):

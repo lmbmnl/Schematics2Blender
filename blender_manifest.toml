@@ -1,13 +1,13 @@
 schema_version = "1.0.0"
 
-id = "mcedit2blender"
-version = "0.2.0"
-name = "MCEdit2Blender"
+id = "schematics2blender"
+version = "0.3.0"
+name = "Schematics2Blender"
 tagline = "Import Minecraft .schematic and .schem files as blocks"
-maintainer = "MCEdit2Blender contributors"
+maintainer = "lmbmnl"
 type = "add-on"
 
-website = "https://github.com/ConnorKrammer/MCEdit2Blender"
+website = "https://github.com/lmbmnl/Schematics2Blender"
 tags = ["Import-Export"]
 
 blender_version_min = "4.2.0"

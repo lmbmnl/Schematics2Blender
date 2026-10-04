@@ -4,7 +4,7 @@ from ..compat import ensure_diffuse
 from .Block import Block
 
 class Unknown(Block):
-    """A block that MCEdit2Blender can't handle
+    """A block that Schematics2Blender can't handle
     
     Displays a simple cube with magenta sides
     """
