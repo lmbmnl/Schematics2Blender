@@ -1,0 +1,6 @@
+# Minecraft textures belong to Mojang: not redistributed here.
+# Put them in textures/blocks/ inside the installed add-on folder.
+textures/
+__pycache__/
+*.pyc
+*.zip

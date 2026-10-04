@@ -1,0 +1,17 @@
+schema_version = "1.0.0"
+
+id = "mcedit2blender"
+version = "0.1.0"
+name = "MCEdit2Blender"
+tagline = "Import MCEdit .schematic files as individual Minecraft blocks"
+maintainer = "MCEdit2Blender contributors"
+type = "add-on"
+
+website = "https://github.com/ConnorKrammer/MCEdit2Blender"
+tags = ["Import-Export"]
+
+blender_version_min = "4.2.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
