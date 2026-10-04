@@ -222,6 +222,7 @@ def use_colors(on, meshes=None):
     """Mette i materiali a tinta unita al posto di quelli con le texture (on) o
     rimette le texture. I materiali tolti restano nel file (fake user) e la mesh
     ricorda quali erano, slot per slot."""
+    _used.clear()
     if on:
         ensure_flats()
     flats = flat_materials()
@@ -261,9 +262,47 @@ def _use_colors_update(scene, _context):
 def after_import(scene, materials, meshes):
     """Dopo un import con i modelli: materiali a tinta unita per le texture
     nuove e, se "Usa colori" e' attivo, subito sulle mesh importate."""
+    _used.clear()
     ensure_flats(materials)
     if scene.s2b_use_colors:
         use_colors(True, meshes)
+
+
+# --- texture usate nella scena (filtro della lista)
+
+_used = {}  # nome della scena -> set delle texture; svuotato a ogni modifica
+
+
+def used_textures(scene):
+    """Texture dei materiali (con texture o a tinta unita) sugli oggetti della scena.
+    Calcolato una volta e tenuto finche' la scena non cambia: la lista si
+    ridisegna spesso e con Instance gli oggetti possono essere decine di migliaia."""
+    if scene.name not in _used:
+        meshes, found = set(), set()
+        for ob in scene.objects:
+            if ob.type != "MESH":
+                continue
+            if ob.data not in meshes:
+                meshes.add(ob.data)
+                for mat in ob.data.materials:
+                    found.add(texture_of(mat) or (mat.get("mc_flat") if mat else None))
+            for slot in ob.material_slots:
+                if slot.link == "OBJECT":
+                    found.add(texture_of(slot.material) or (slot.material.get("mc_flat") if slot.material else None))
+        found.discard(None)
+        _used[scene.name] = found
+    return _used[scene.name]
+
+
+@bpy.app.handlers.persistent
+def _forget_used(_scene=None, depsgraph=None):
+    """Svuota la cache, tranne quando sono cambiate solo posizioni / rotazioni /
+    scale di oggetti (spostare 50.000 blocchi non deve ricalcolarla a ogni passo)."""
+    if depsgraph is not None and depsgraph.updates and all(
+            isinstance(u.id, bpy.types.Object) and u.is_updated_transform
+            and not u.is_updated_geometry and not u.is_updated_shading for u in depsgraph.updates):
+        return
+    _used.clear()
 
 
 # --- interfaccia
@@ -288,6 +327,9 @@ class SCHEMATIC_UL_colors(UIList):
     def filter_items(self, context, data, propname):
         items = getattr(data, propname)
         flags = [self.bitflag_filter_item if m.get("mc_flat") else 0 for m in items]
+        if context.scene.s2b_colors_used_only:
+            used = used_textures(context.scene)
+            flags = [f if f and m["mc_flat"] in used else 0 for f, m in zip(flags, items)]
         if self.filter_name:
             needle = self.filter_name.lower()
             flags = [f if f and (needle in m.name.lower() or needle in str(m.get("mc_flat")).lower()) else 0
@@ -371,6 +413,14 @@ class SCHEMATIC_PT_colors(Panel):
         scene = context.scene
         layout.prop(scene, "s2b_use_colors", icon="COLOR")
         layout.operator(SCHEMATIC_OT_colors_create.bl_idname, icon="ADD")
+        flats = flat_materials()
+        row = layout.row()
+        row.prop(scene, "s2b_colors_used_only", icon="FILTER")
+        if scene.s2b_colors_used_only:
+            shown = len(used_textures(scene) & set(flats))
+            row.label(text="%d di %d" % (shown, len(flats)))
+        else:
+            row.label(text="%d" % len(flats))
         layout.template_list("SCHEMATIC_UL_colors", "", bpy.data, "materials", scene, "s2b_color_index", rows=8)
         mats = bpy.data.materials
         index = scene.s2b_color_index
@@ -399,13 +449,23 @@ def register():
         name="Usa colori al posto delle texture", default=False, update=_use_colors_update,
         description="Sostituisce i materiali con le texture di Minecraft con quelli a tinta unita")
     bpy.types.Scene.s2b_color_index = IntProperty(default=-1)
+    bpy.types.Scene.s2b_colors_used_only = BoolProperty(
+        name="Solo texture usate", default=True,
+        description="Mostra solo le texture dei materiali sugli oggetti di questa scena")
     for cls in CLASSES:
         bpy.utils.register_class(cls)
+    for handlers in (bpy.app.handlers.depsgraph_update_post, bpy.app.handlers.load_post):
+        handlers.append(_forget_used)
 
 
 def unregister():
+    for handlers in (bpy.app.handlers.depsgraph_update_post, bpy.app.handlers.load_post):
+        if _forget_used in handlers:
+            handlers.remove(_forget_used)
+    _used.clear()
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
+    del bpy.types.Scene.s2b_colors_used_only
     del bpy.types.Scene.s2b_color_index
     del bpy.types.Scene.s2b_use_colors
     del bpy.types.Material.s2b_color

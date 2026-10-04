@@ -41,6 +41,8 @@ leaves, glass, torches) keep their shape through the texture's alpha. **Salva pr
 stores colours and names in `presets/texture_colors.json` in the add-on's user folder
 (kept by updates); they are used by every later import, in any .blend file.
 A material made of two textures (grass block side: dirt + overlay) uses the bottom one.
+**Solo texture usate** (on by default) lists only the textures of materials on objects
+of the current scene; turn it off to see every colour in the file.
 
 With **Minecraft Assets** empty the add-on uses its own 1.12 models and the
 texture folder below.

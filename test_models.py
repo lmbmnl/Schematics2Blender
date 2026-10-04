@@ -196,6 +196,41 @@ clear_flat = colors.flat_materials()["minecraft:block/glass"]
 assert clear_flat.node_tree.nodes["Principled BSDF"].inputs["Alpha"].is_linked
 assert not again.node_tree.nodes["Principled BSDF"].inputs["Alpha"].is_linked  # pietra: opaca
 
+# "Solo texture usate": nella lista restano le texture degli oggetti della scena
+import types  # noqa: E402
+run(glass, "JOIN")  # in scena solo vetro; la pietra ha il suo colore ma nessun oggetto
+fake = types.SimpleNamespace(bitflag_filter_item=1, filter_name="")
+
+
+def listed():
+    flags, _order = colors.SCHEMATIC_UL_colors.filter_items(fake, bpy.context, bpy.data, "materials")
+    return sorted(m["mc_flat"] for f, m in zip(flags, bpy.data.materials) if f)
+
+
+assert scene.s2b_colors_used_only  # attivo di default
+assert listed() == ["minecraft:block/glass"], listed()
+scene.s2b_colors_used_only = False
+assert listed() == ["minecraft:block/glass", "minecraft:block/stone", "minecraft:block/wall"], listed()  # tutte
+scene.s2b_colors_used_only = True
+for ob in list(bpy.data.objects):  # la scena cambia: il filtro si aggiorna
+    bpy.data.objects.remove(ob)
+bpy.context.view_layer.update()
+assert listed() == [], listed()
+moved = run(two, "INSTANCE")
+assert listed() == ["minecraft:block/stone"], listed()
+colors._used["sentinel"] = set()  # spostare un oggetto non svuota la cache
+moved[0].location.x += 3
+bpy.context.view_layer.update()
+assert "sentinel" in colors._used
+moved[0].data.materials[0] = bpy.data.materials["Pietra"]  # cambia un materiale: si'
+bpy.context.view_layer.update()
+assert "sentinel" not in colors._used
+moved[0].data.materials[0] = bpy.data.materials["mc stone"]
+scene.s2b_use_colors = True  # anche con i colori al posto delle texture
+assert listed() == ["minecraft:block/stone"], listed()
+scene.s2b_use_colors = False
+
 addon.unregister()
 assert not hasattr(bpy.types.Material, "s2b_color")
+assert colors._forget_used not in bpy.app.handlers.depsgraph_update_post
 print("test_models: ok")
