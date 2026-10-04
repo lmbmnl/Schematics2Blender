@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "schematics2blender"
-version = "0.4.0"
+version = "0.4.1"
 name = "Schematics2Blender"
 tagline = "Import Minecraft .schematic and .schem files as blocks"
 maintainer = "lmbmnl"

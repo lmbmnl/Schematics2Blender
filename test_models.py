@@ -117,6 +117,14 @@ assert got == [(-1, "minecraft:cobblestone_wall[east=low,north=none,south=none,u
 (wj,) = run(wall_path, "JOIN")
 assert not wj.data.validate()
 
+# staccionata o vetro isolato: resta nello stato che aveva (prima: IndexError a meta' import)
+body = (ts._short("Width", 6) + ts._short("Height", 1) + ts._short("Length", 1)
+        + ts._bytes("Blocks", [85, 0, 85, 85, 0, 102]) + ts._bytes("Data", [0] * 6))
+alone = write("alone.schematic", gzip.compress(ts._compound("Schematic", body)))
+assert len(run(alone, "INSTANCE")) == 4
+(aj,) = run(alone, "JOIN")
+assert not aj.data.validate()
+
 # coppie di facce coincidenti tra blocchi diversi: niente facce doppie nella mesh
 mcimport = addon.mcimport
 import numpy as np  # noqa: E402

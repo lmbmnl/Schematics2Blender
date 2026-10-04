@@ -417,17 +417,22 @@ class Job:
             yield
         if self.legacy:
             full = {k: t.full for k, t in self.templates.items()}
-            for idx, moved in connect_states(self.cells, self.palette, full, self.assets).items():
-                keep = np.ones(len(self.cells[idx]), bool)
-                lookup = {tuple(c): i for i, c in enumerate(self.cells[idx].tolist())}
+            moves = connect_states(self.cells, self.palette, full, self.assets)
+            # connect_states rida' tutte le celle di ogni gruppo: prima si svuotano i
+            # gruppi, poi si riempiono quelli di arrivo (che possono essere gli stessi:
+            # una staccionata isolata resta nello stato che aveva)
+            position = {state: i for i, state in enumerate(self.palette)}
+            arriving = {}
+            for idx, moved in moves.items():
+                self.cells[idx] = np.zeros((0, 3), np.int64)
                 for cell, state in moved:
-                    if state not in self.palette:
+                    if state not in position:
+                        position[state] = len(self.palette)
                         self.palette.append(state)
-                    new = self.palette.index(state)
-                    self.cells.setdefault(new, np.zeros((0, 3), np.int64))
-                    self.cells[new] = np.vstack((self.cells[new], [cell]))
-                    keep[lookup[cell]] = False
-                self.cells[idx] = self.cells[idx][keep]
+                    arriving.setdefault(position[state], []).append(cell)
+            for new, cells in arriving.items():
+                old = self.cells.get(new, np.zeros((0, 3), np.int64))
+                self.cells[new] = np.vstack((old, np.array(cells, np.int64).reshape(-1, 3)))
             for key in self.cells:
                 if key not in self.templates:
                     self.templates[key] = Template(self.palette[key], self.models, self.materials)
